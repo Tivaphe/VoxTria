@@ -1,0 +1,31 @@
+MIT License
+
+Copyright (c) 2026 VoxTria contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+NOTE IMPORTANTE SUR LES DÉPENDANCES TIERCES
+-------------------------------------------------------------------------------
+La licence MIT ci-dessus couvre UNIQUEMENT le code de ce dépôt (VoxTria).
+Les modèles et bibliothèques utilisés à l'exécution conservent LEURS PROPRES
+licences, dont certaines sont plus restrictives que MIT. Voir le fichier NOTICE
+pour le détail. En particulier, les POIDS du modèle Supertonic sont sous
+licence OpenRAIL-M (restrictions d'usage), et le modèle LLM que vous choisissez
+possède sa propre licence.

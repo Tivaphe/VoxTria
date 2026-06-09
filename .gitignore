@@ -1,0 +1,40 @@
+# Environnements virtuels
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Sorties et données runtime (NE PAS committer)
+_out/
+voices/*.json
+!voices/.gitkeep
+_supertonic_embed/
+
+# Fichiers audio générés
+*.wav
+*.mp3
+
+# Caches modèles (au cas où)
+*.onnx
+*.gguf
+*.pt
+
+# Sauvegardes / divers
+*.bak
+static/index_simple.html.bak
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets éventuels (ne jamais committer)
+.env
+*.key
+secrets.json

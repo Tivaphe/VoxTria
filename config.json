@@ -1,0 +1,34 @@
+{
+  "asr": {
+    "model_size": "small",
+    "device": "cpu",
+    "compute_type": "int8",
+    "language": "fr"
+  },
+  "llm": {
+    "provider": "openai_compatible",
+    "base_url": "http://localhost:8080/v1",
+    "api_key": "not-needed",
+    "model": "lfm2.5-1.2b-instruct",
+    "temperature": 0.7,
+    "max_tokens": 512,
+    "system_prompt": "Tu es un assistant vocal francophone, utile et concis. Réponds en français, en phrases courtes et naturelles à lire à voix haute. Évite les listes à puces et le markdown. Tu peux insérer avec parcimonie des balises d'expression pour rendre la voix plus naturelle, parmi : <laugh>, <chuckle>, <sigh>, <breath>, <gasp>, <cough>, <sniff>, <groan>, <yawn>, <clear_throat>. Utilise-les seulement quand c'est pertinent (par ex. <laugh> après une blague), jamais plus d'une ou deux par réponse."
+  },
+  "tts": {
+    "engine": "supertonic",
+    "voice": "M1",
+    "lang": "fr",
+    "total_steps": 8,
+    "speed": 1.05,
+    "silence_duration": 0.3,
+    "custom_style_path": ""
+  },
+  "agent": {
+    "enabled": false,
+    "tools": ["web_search_stub", "clock"]
+  },
+  "vad": {
+    "threshold": 0.02,
+    "silence_ms": 1000
+  }
+}
