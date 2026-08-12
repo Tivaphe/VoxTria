@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoxTria — Assistant vocal local</title>
+<style>
+  :root{
+    --bg:#0a0b14; --panel:#12142099; --panel-solid:#121420; --line:#252a41;
+    --txt:#e6e9f5; --muted:#8b93b8;
+    --neon:#00e5ff; --neon2:#b14aed; --ok:#25d0a0; --warn:#ffb020; --err:#ff4d6d;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:
+      radial-gradient(1100px 600px at 12% -8%, #17284a55, transparent 60%),
+      radial-gradient(900px 500px at 105% 8%, #4a176855, transparent 55%),
+      var(--bg);
+    color:var(--txt);
+    font:15px/1.55 ui-sans-serif,system-ui,"Segoe UI",Inter,Roboto,sans-serif;
+    display:flex; flex-direction:column;
+  }
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#2a3050;border-radius:8px}
+
+  /* ---------- en-tête ---------- */
+  header{
+    display:flex;align-items:center;gap:14px;padding:12px 18px;
+    border-bottom:1px solid var(--line);background:#0c0e18cc;backdrop-filter:blur(8px);
+    position:sticky;top:0;z-index:20;flex-wrap:wrap;
+  }
+  .logo{font-weight:800;letter-spacing:.4px;font-size:18px;
+    background:linear-gradient(92deg,var(--neon),var(--neon2));
+    -webkit-background-clip:text;background-clip:text;color:transparent;white-space:nowrap}
+  .spacer{flex:1}
+  .pill{
+    display:inline-flex;align-items:center;gap:8px;padding:7px 13px;border-radius:999px;
+    border:1px solid var(--line);background:#141827;font-size:13px;white-space:nowrap;
+  }
+  .dot{width:9px;height:9px;border-radius:50%;background:#4a5170;transition:.25s}
+  .dot.on{background:var(--ok);box-shadow:0 0 10px var(--ok)}
+  .dot.busy{background:var(--warn);box-shadow:0 0 10px var(--warn)}
+  .dot.err{background:var(--err);box-shadow:0 0 10px var(--err)}
+  .btn{
+    padding:8px 14px;border-radius:10px;border:1px solid var(--line);
+    background:#171b2c;transition:.18s;white-space:nowrap;
+  }
+  .btn:hover:not(:disabled){border-color:var(--neon);box-shadow:0 0 0 3px #00e5ff1a}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.primary{border-color:#1d6f86;background:linear-gradient(180deg,#123a49,#0e2c38);color:#c8f6ff}
+  .btn.on{border-color:var(--ok);background:#0e3328;color:#b6f3dd}
+  .btn.danger:hover{border-color:var(--err);box-shadow:0 0 0 3px #ff4d6d1a}
+
+  /* ---------- disposition ---------- */
+  main{flex:1;display:grid;grid-template-columns:1fr 390px;min-height:0}
+  @media(max-width:940px){
+    main{grid-template-columns:1fr}
+    aside{position:fixed;inset:0 0 0 auto;width:min(390px,92vw);transform:translateX(101%);
+      transition:transform .25s;z-index:30;box-shadow:-18px 0 50px #0009}
+    aside.open{transform:none}
+  }
+  section.chat{display:flex;flex-direction:column;min-width:0;min-height:0}
+  #log{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:14px}
+
+  .msg{max-width:min(680px,88%);padding:11px 15px;border-radius:var(--radius);
+    border:1px solid var(--line);background:var(--panel-solid);white-space:pre-wrap;
+    word-wrap:break-word;animation:pop .2s ease-out}
+  @keyframes pop{from{opacity:0;transform:translateY(6px)}}
+  .msg.user{align-self:flex-end;border-color:#1f4c63;
+    background:linear-gradient(180deg,#12303d,#0f2732)}
+  .msg.bot{align-self:flex-start}
+  .msg.sys{align-self:center;max-width:90%;text-align:center;font-size:13px;
+    color:var(--muted);background:#0f1220;border-style:dashed}
+  .msg.error{align-self:center;max-width:90%;border-color:var(--err);color:#ffc3ce;background:#2a1420}
+  .who{font-size:11px;text-transform:uppercase;letter-spacing:.7px;color:var(--muted);margin-bottom:3px}
+  .meta{margin-top:7px;font-size:11px;color:var(--muted);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .tag{color:var(--neon2);opacity:.85}
+  audio{height:32px;margin-top:8px;width:min(320px,100%)}
+
+  .typing span{display:inline-block;width:7px;height:7px;margin-right:4px;border-radius:50%;
+    background:var(--neon);animation:bounce 1.1s infinite}
+  .typing span:nth-child(2){animation-delay:.15s}
+  .typing span:nth-child(3){animation-delay:.3s}
+  @keyframes bounce{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-5px)}}
+
+  /* ---------- barre de saisie ---------- */
+  .composer{border-top:1px solid var(--line);padding:13px 18px;display:flex;gap:10px;
+    align-items:flex-end;background:#0c0e18cc;backdrop-filter:blur(8px)}
+  .composer textarea{
+    flex:1;resize:none;max-height:150px;padding:11px 13px;border-radius:12px;
+    border:1px solid var(--line);background:#0f1220;outline:none;
+  }
+  .composer textarea:focus{border-color:var(--neon);box-shadow:0 0 0 3px #00e5ff14}
+  .mic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:19px;
+    border:1px solid var(--line);background:#171b2c;transition:.18s;flex:none}
+  .mic:hover:not(:disabled){border-color:var(--neon)}
+  .mic.rec{border-color:var(--err);background:#2a1420;animation:pulse 1.3s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 #ff4d6d66}70%{box-shadow:0 0 0 14px #ff4d6d00}100%{box-shadow:0 0 0 0 #ff4d6d00}}
+  .level{position:absolute;left:0;bottom:0;height:3px;background:var(--neon);
+    transition:width .07s linear;border-radius:2px}
+  .composer-wrap{position:relative}
+
+  /* ---------- panneau réglages ---------- */
+  aside{border-left:1px solid var(--line);background:var(--panel-solid);
+    overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:16px}
+  fieldset{border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin:0;background:#0f1220}
+  legend{padding:0 8px;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--neon)}
+  label{display:block;font-size:12px;color:var(--muted);margin:11px 0 4px}
+  label:first-of-type{margin-top:0}
+  input[type=text],input[type=password],input[type=number],select,textarea.cfg{
+    width:100%;padding:8px 10px;border-radius:9px;border:1px solid var(--line);
+    background:#0b0d18;outline:none}
+  input:focus,select:focus,textarea.cfg:focus{border-color:var(--neon)}
+  input[type=range]{width:100%;accent-color:var(--neon)}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1;min-width:0}
+  .val{float:right;color:var(--neon);font-variant-numeric:tabular-nums}
+  .hint{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45}
+  .hint.warn{color:var(--warn)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .badge{font-size:10px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  #toast{position:fixed;bottom:22px;left:50%;transform:translate(-50%,90px);
+    background:#171b2c;border:1px solid var(--line);padding:11px 18px;border-radius:11px;
+    transition:.3s;z-index:60;max-width:90vw;box-shadow:0 10px 40px #0008}
+  #toast.show{transform:translate(-50%,0)}
+  #toast.ok{border-color:var(--ok)} #toast.err{border-color:var(--err)}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🎙️ VoxTria</div>
+  <div class="pill"><span class="dot" id="dotPipe"></span><span id="pipeTxt">Pipeline : OFF</span></div>
+  <div class="pill" id="pillLlm" title="État du serveur LLM"><span class="dot" id="dotLlm"></span><span id="llmTxt">LLM ?</span></div>
+  <div class="spacer"></div>
+  <button class="btn" id="btnPipe">Démarrer</button>
+  <button class="btn" id="btnHands" title="Conversation continue : réécoute après chaque réponse">🔁 Mains-libres</button>
+  <button class="btn danger" id="btnClear" title="Efface l'historique de conversation">🧹</button>
+  <button class="btn" id="btnCfg" title="Paramètres">⚙️</button>
+</header>
+
+<main>
+  <section class="chat">
+    <div id="log" aria-live="polite"></div>
+    <div class="composer composer-wrap">
+      <div class="level" id="level" style="width:0"></div>
+      <textarea id="input" rows="1" placeholder="Écris un message… (Entrée pour envoyer, Maj+Entrée pour une nouvelle ligne)"></textarea>
+      <button class="mic" id="btnMic" title="Parler (fin de parole détectée automatiquement)">🎤</button>
+      <button class="btn primary" id="btnSend">Envoyer</button>
+    </div>
+  </section>
+
+  <aside id="panel">
+    <fieldset>
+      <legend>🧠 LLM</legend>
+      <label>URL du serveur (OpenAI-compatible)</label>
+      <input type="text" id="llmUrl" placeholder="http://localhost:8080/v1">
+      <label>Modèle <span class="badge" id="modelBadge">—</span></label>
+      <div class="row">
+        <select id="llmModelSel"><option value="">(saisie manuelle)</option></select>
+        <button class="btn" id="btnDiscover" title="Découvrir les modèles via /v1/models" style="flex:0 0 auto">🔍</button>
+      </div>
+      <input type="text" id="llmModel" placeholder="nom-du-modele" style="margin-top:6px">
+      <label>Clé API <span class="badge" id="keyBadge">non définie</span></label>
+      <input type="password" id="llmKey" placeholder="laisser vide si non requise" autocomplete="off">
+      <div class="hint">Laisse vide pour conserver la clé enregistrée. Elle n'est jamais renvoyée au navigateur.</div>
+      <label>Température <span class="val" id="tempV">0.7</span></label>
+      <input type="range" id="llmTemp" min="0" max="2" step="0.05">
+      <label>Tokens max</label>
+      <input type="number" id="llmMax" min="1" max="32768">
+      <label>Prompt système</label>
+      <textarea class="cfg" id="llmPrompt" rows="5"></textarea>
+    </fieldset>
+
+    <fieldset>
+      <legend>🔊 Voix (TTS)</legend>
+      <label>Voix</label>
+      <select id="ttsVoice"></select>
+      <label>Qualité — steps <span class="val" id="stepsV">8</span></label>
+      <input type="range" id="ttsSteps" min="1" max="32" step="1">
+      <div class="hint">Plus de steps = meilleure qualité, synthèse plus lente.</div>
+      <label>Vitesse <span class="val" id="speedV">1.05</span></label>
+      <input type="range" id="ttsSpeed" min="0.5" max="2" step="0.05">
+      <label>Silence entre phrases (s) <span class="val" id="silV">0.3</span></label>
+      <input type="range" id="ttsSil" min="0" max="2" step="0.05">
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px">
+        <input type="checkbox" id="optStream" checked style="width:auto">
+        <span>⚡ Réponse progressive (streaming)</span>
+      </label>
+      <div class="hint">Synthétise phrase par phrase : le son démarre bien plus
+        vite au lieu d'attendre toute la réponse.</div>
+      <div class="actions">
+        <button class="btn" id="btnTest">▶️ Tester la voix</button>
+      </div>
+      <div class="hint" id="ttsHint"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>🎭 Voix clonée</legend>
+      <div class="hint">Charge un JSON exporté du Voice Builder, ou produit par <code>clone_voice.py</code>.</div>
+      <div class="actions">
+        <button class="btn" id="btnUpload">⬆️ Charger un .json</button>
+        <button class="btn danger" id="btnDelVoice">🗑️ Supprimer</button>
+      </div>
+      <input type="file" id="fileVoice" accept="application/json,.json" class="sr">
+      <div class="hint">🔒 Ne clone que des voix pour lesquelles tu as le consentement du locuteur.</div>
+    </fieldset>
+
+    <fieldset>
+      <legend>🎤 Micro & ASR</legend>
+      <label>Modèle Whisper</label>
+      <select id="asrModel">
+        <option>tiny</option><option>base</option><option>small</option>
+        <option>medium</option><option>large-v3</option><option>large-v3-turbo</option>
+      </select>
+      <div class="hint">Plus gros = plus précis mais plus lent sur CPU. Le modèle est rechargé automatiquement.</div>
+      <label>Langue</label>
+      <select id="asrLang">
+        <option value="fr">Français</option><option value="en">Anglais</option>
+        <option value="es">Espagnol</option><option value="de">Allemand</option>
+        <option value="it">Italien</option><option value="">Détection auto</option>
+      </select>
+      <label>Sensibilité (seuil VAD) <span class="val" id="vadV">0.02</span></label>
+      <input type="range" id="vadThr" min="0.002" max="0.2" step="0.002">
+      <div class="hint">Plus bas = plus sensible. Si l'enregistrement se coupe trop tôt, baisse la valeur.</div>
+      <label>Durée de silence avant fin (ms) <span class="val" id="silmsV">1000</span></label>
+      <input type="range" id="vadSil" min="300" max="4000" step="100">
+    </fieldset>
+
+    <div class="actions" style="position:sticky;bottom:0;background:var(--panel-solid);padding:10px 0">
+      <button class="btn primary" id="btnSave" style="flex:1">💾 Enregistrer</button>
+      <button class="btn" id="btnReload">↩︎ Recharger</button>
+    </div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+// URLs relatives : le navigateur n'est pas forcément sur la même machine que
+// le serveur (proxy, LAN, preview distant).
+const API = (p) => p;
+
+const $ = (id) => document.getElementById(id);
+const log = $("log");
+
+let CFG = null;              // configuration serveur courante
+let pipelineOn = false;      // le pipeline doit être démarré pour dialoguer
+let handsFree = false;       // relance l'écoute après chaque réponse
+let busy = false;            // un tour de parole est en cours
+let recording = false;
+
+/* ------------------------------------------------------------------ UI */
+function toast(msg, kind = "") {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "show " + kind;
+  clearTimeout(t._t);
+  t._t = setTimeout(() => (t.className = kind), 3200);
+}
+
+function scrollDown() { log.scrollTop = log.scrollHeight; }
+
+function addMsg(role, text, opts = {}) {
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  if (role === "user" || role === "bot") {
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = role === "user" ? "Toi" : "VoxTria";
+    el.appendChild(who);
+  }
+  const body = document.createElement("div");
+  // Les balises d'expression sont mises en valeur au lieu d'être lues telles
+  // quelles : le serveur les retire déjà avant la synthèse vocale.
+  const TAGS = /<\/?(laugh|chuckle|sigh|breath|gasp|cough|sniff|groan|yawn|clear_throat)\s*\/?>/gi;
+  let last = 0, m;
+  while ((m = TAGS.exec(text)) !== null) {
+    if (m.index > last) body.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const s = document.createElement("span");
+    s.className = "tag";
+    s.textContent = m[0];
+    body.appendChild(s);
+    last = m.index + m[0].length;
+  }
+  body.appendChild(document.createTextNode(text.slice(last)));
+  el.appendChild(body);
+
+  if (opts.audio) {
+    const a = document.createElement("audio");
+    a.controls = true;
+    a.src = opts.audio;
+    a.autoplay = true;
+    el.appendChild(a);
+    if (opts.onended) a.addEventListener("ended", opts.onended, { once: true });
+    // Si la lecture auto est bloquée par le navigateur, on ne bloque pas
+    // la boucle mains-libres pour autant.
+    a.play?.().catch(() => opts.onended && opts.onended());
+  } else if (opts.onended) {
+    setTimeout(opts.onended, 250);
+  }
+
+  if (opts.meta) {
+    const mt = document.createElement("div");
+    mt.className = "meta";
+    mt.textContent = opts.meta;
+    el.appendChild(mt);
+  }
+  log.appendChild(el);
+  scrollDown();
+  return el;
+}
+
+function thinking(on) {
+  let el = $("typing");
+  if (on) {
+    if (el) return;
+    el = document.createElement("div");
+    el.id = "typing";
+    el.className = "msg bot typing";
+    el.innerHTML = "<span></span><span></span><span></span>";
+    log.appendChild(el);
+    scrollDown();
+  } else if (el) el.remove();
+}
+
+function setBusy(v) {
+  busy = v;
+  $("dotPipe").className = "dot " + (v ? "busy" : pipelineOn ? "on" : "");
+  $("btnSend").disabled = v || !pipelineOn;
+  $("btnMic").disabled = v || !pipelineOn;
+}
+
+function setPipeline(on) {
+  pipelineOn = on;
+  $("dotPipe").className = "dot " + (on ? "on" : "");
+  $("pipeTxt").textContent = "Pipeline : " + (on ? "ON" : "OFF");
+  $("btnPipe").textContent = on ? "Arrêter" : "Démarrer";
+  $("btnPipe").classList.toggle("on", on);
+  $("btnSend").disabled = !on;
+  $("btnMic").disabled = !on;
+  if (!on && handsFree) toggleHands(false);
+}
+
+function toggleHands(v) {
+  handsFree = v === undefined ? !handsFree : v;
+  $("btnHands").classList.toggle("on", handsFree);
+  if (handsFree && !pipelineOn) setPipeline(true);
+}
+
+/* -------------------------------------------------------------- réseau */
+async function api(path, opts = {}) {
+  const r = await fetch(API(path), opts);
+  const ct = r.headers.get("content-type") || "";
+  const data = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  return data;
+}
+
+async function checkLlm() {
+  const dot = $("dotLlm"), txt = $("llmTxt");
+  try {
+    const d = await api("/api/models");
+    if (d.models && d.models.length) {
+      dot.className = "dot on";
+      txt.textContent = `LLM : ${d.models.length} modèle(s)`;
+      fillModels(d.models);
+    } else {
+      dot.className = "dot err";
+      txt.textContent = "LLM injoignable";
+    }
+  } catch {
+    dot.className = "dot err";
+    txt.textContent = "LLM injoignable";
+  }
+}
+
+/* --------------------------------------------------- config <-> formulaire */
+function fillModels(models) {
+  const sel = $("llmModelSel");
+  const cur = CFG?.llm?.model || "";
+  sel.innerHTML = '<option value="">(saisie manuelle)</option>';
+  for (const m of models) {
+    const o = document.createElement("option");
+    o.value = o.textContent = m;
+    if (m === cur) o.selected = true;
+    sel.appendChild(o);
+  }
+  $("modelBadge").textContent = models.length ? `${models.length} dispo` : "—";
+}
+
+async function loadVoices() {
+  const d = await api("/api/voices");
+  const sel = $("ttsVoice");
+  const cur = CFG?.tts?.voice || "M1";
+  sel.innerHTML = "";
+  const g1 = document.createElement("optgroup"); g1.label = "Presets";
+  for (const v of d.voices) {
+    const o = document.createElement("option");
+    o.value = o.textContent = v;
+    g1.appendChild(o);
+  }
+  sel.appendChild(g1);
+  if (d.custom_voices?.length) {
+    const g2 = document.createElement("optgroup"); g2.label = "🎭 Voix clonées";
+    for (const v of d.custom_voices) {
+      const o = document.createElement("option");
+      o.value = v;
+      o.textContent = "🎭 " + v.replace(/^custom:/, "");
+      g2.appendChild(o);
+    }
+    sel.appendChild(g2);
+  }
+  sel.value = cur;
+  if (sel.selectedIndex < 0) sel.value = "M1";
+}
+
+function applyCfg(c) {
+  CFG = c;
+  $("llmUrl").value = c.llm.base_url || "";
+  $("llmModel").value = c.llm.model || "";
+  $("llmTemp").value = c.llm.temperature; $("tempV").textContent = c.llm.temperature;
+  $("llmMax").value = c.llm.max_tokens;
+  $("llmPrompt").value = c.llm.system_prompt || "";
+  $("llmKey").value = "";
+  $("keyBadge").textContent = c.llm.api_key_set ? "définie ✓" : "non définie";
+  $("ttsSteps").value = c.tts.total_steps; $("stepsV").textContent = c.tts.total_steps;
+  $("ttsSpeed").value = c.tts.speed; $("speedV").textContent = c.tts.speed;
+  $("ttsSil").value = c.tts.silence_duration; $("silV").textContent = c.tts.silence_duration;
+  $("asrModel").value = c.asr.model_size;
+  $("asrLang").value = c.asr.language ?? "fr";
+  $("vadThr").value = c.vad.threshold; $("vadV").textContent = c.vad.threshold;
+  $("vadSil").value = c.vad.silence_ms; $("silmsV").textContent = c.vad.silence_ms;
+}
+
+function collectCfg() {
+  const patch = {
+    llm: {
+      base_url: $("llmUrl").value.trim(),
+      model: ($("llmModelSel").value || $("llmModel").value).trim(),
+      temperature: parseFloat($("llmTemp").value),
+      max_tokens: parseInt($("llmMax").value, 10),
+      system_prompt: $("llmPrompt").value,
+    },
+    tts: {
+      voice: $("ttsVoice").value,
+      total_steps: parseInt($("ttsSteps").value, 10),
+      speed: parseFloat($("ttsSpeed").value),
+      silence_duration: parseFloat($("ttsSil").value),
+    },
+    asr: { model_size: $("asrModel").value, language: $("asrLang").value },
+    vad: {
+      threshold: parseFloat($("vadThr").value),
+      silence_ms: parseInt($("vadSil").value, 10),
+    },
+  };
+  // Clé vide = on conserve celle du serveur (il ne l'écrase pas dans ce cas).
+  const k = $("llmKey").value.trim();
+  if (k) patch.llm.api_key = k;
+  return patch;
+}
+
+async function loadAll() {
+  const c = await api("/api/config");
+  applyCfg(c);
+  await loadVoices();
+  checkLlm();
+  if (!c.tts.voice.startsWith("custom")) $("ttsHint").textContent = "";
+}
+
+/* ------------------------------------------------------------ discussion */
+/* File d'attente audio : les phrases arrivent plus vite qu'elles ne se
+   jouent, on les enchaîne sans chevauchement. */
+const audioQueue = [];
+let playing = false;
+
+function enqueueAudio(url, onDrain) {
+  audioQueue.push({ url, onDrain });
+  if (!playing) drainQueue();
+}
+
+function drainQueue() {
+  const item = audioQueue.shift();
+  if (!item) {
+    playing = false;
+    return;
+  }
+  playing = true;
+  const a = new Audio(item.url);
+  const next = () => { item.onDrain?.(); drainQueue(); };
+  a.addEventListener("ended", next, { once: true });
+  a.addEventListener("error", next, { once: true });
+  a.play().catch(next);   // lecture auto bloquée : on n'immobilise pas la file
+}
+
+function resetQueue() {
+  audioQueue.length = 0;
+  playing = false;
+}
+
+async function sendTextStreaming(text) {
+  addMsg("user", text);
+  $("input").value = "";
+  $("input").style.height = "auto";
+  setBusy(true); thinking(true);
+
+  let el = null, body = null, txt = "", firstMs = null, nAudio = 0;
+  const t0 = performance.now();
+
+  const finishTurn = () => {
+    // Relance l'écoute uniquement quand toute la file est jouée.
+    if (handsFree && pipelineOn && !busy && !playing && !audioQueue.length) startRec();
+  };
+
+  try {
+    const r = await fetch(API("/api/chat_stream"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const blocks = buf.split("\n\n");
+      buf = blocks.pop();                 // fragment incomplet conservé
+      for (const b of blocks) {
+        const line = b.trim();
+        if (!line.startsWith("data:")) continue;
+        let ev;
+        try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+        if (ev.type === "delta") {
+          if (!el) {
+            thinking(false);
+            el = addMsg("bot", "");
+            body = el.lastChild;
+          }
+          txt += ev.text;
+          body.textContent = txt;
+          scrollDown();
+        } else if (ev.type === "sentence") {
+          if (ev.audio_url) {
+            nAudio++;
+            if (firstMs === null) firstMs = Math.round(performance.now() - t0);
+            enqueueAudio(ev.audio_url, finishTurn);
+          }
+        } else if (ev.type === "error") {
+          thinking(false);
+          addMsg("error", "⚠️ " + ev.error);
+          if (handsFree) toggleHands(false);
+        } else if (ev.type === "done") {
+          thinking(false);
+          if (el) {
+            // Rendu final : met en valeur les balises d'expression.
+            el.remove();
+            el = addMsg("bot", ev.assistant);
+          }
+          const bits = [`⏱️ ${ev.elapsed}s`];
+          if (firstMs !== null) bits.push(`1er son ${firstMs}ms`);
+          if (nAudio) bits.push(`${nAudio} segment(s)`);
+          const mt = document.createElement("div");
+          mt.className = "meta";
+          mt.textContent = bits.join("   ");
+          (el || log).appendChild(mt);
+          scrollDown();
+          if (!nAudio) finishTurn();      // aucun audio : on relance quand même
+        }
+      }
+    }
+  } catch (e) {
+    thinking(false);
+    addMsg("error", "⚠️ " + e.message);
+    if (handsFree) toggleHands(false);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function sendText(text) {
+  if (!text.trim() || busy) return;
+  if (!pipelineOn) { toast("Démarre le pipeline d'abord.", "err"); return; }
+  resetQueue();
+  if ($("optStream").checked) return sendTextStreaming(text);
+  addMsg("user", text);
+  $("input").value = "";
+  $("input").style.height = "auto";
+  setBusy(true); thinking(true);
+  try {
+    const d = await api("/api/chat_text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    thinking(false);
+    showReply(d);
+  } catch (e) {
+    thinking(false);
+    addMsg("error", "⚠️ " + e.message);
+    if (handsFree) toggleHands(false);
+  } finally { setBusy(false); }
+}
+
+function showReply(d) {
+  const bits = [];
+  if (d.elapsed) bits.push(`⏱️ ${d.elapsed}s`);
+  if (d.timings) {
+    const t = d.timings;
+    const parts = [];
+    if (t.asr_ms) parts.push(`ASR ${t.asr_ms}ms`);
+    if (t.llm_ms) parts.push(`LLM ${t.llm_ms}ms`);
+    if (t.tts_ms) parts.push(`TTS ${t.tts_ms}ms`);
+    if (parts.length) bits.push(parts.join(" · "));
+  }
+  addMsg("bot", d.assistant, {
+    audio: d.audio_url,
+    meta: bits.join("   "),
+    onended: () => { if (handsFree && pipelineOn && !busy) startRec(); },
+  });
+  // Le serveur renvoie le texte même si la synthèse a échoué (succès partiel).
+  if (d.tts_error) addMsg("sys", "🔇 Synthèse vocale indisponible : " + d.tts_error);
+}
+
+/* ------------------------------------------------- micro + détection VAD */
+let media, recorder, chunks = [], audioCtx, analyser, rafId, srcNode;
+
+async function startRec() {
+  if (recording || busy || !pipelineOn) return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+  } catch {
+    toast("Micro refusé ou indisponible.", "err");
+    toggleHands(false);
+    return;
+  }
+  media = stream;
+  chunks = [];
+  recording = true;
+  $("btnMic").classList.add("rec");
+  $("btnMic").textContent = "⏹️";
+
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  recorder.onstop = onRecStop;
+  recorder.start();
+
+  // --- VAD : fin de parole détectée sur l'énergie du signal ---
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  srcNode = audioCtx.createMediaStreamSource(stream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  srcNode.connect(analyser);
+  const buf = new Float32Array(analyser.fftSize);
+
+  const thr = CFG?.vad?.threshold ?? 0.02;
+  const silenceMs = CFG?.vad?.silence_ms ?? 1000;
+  const maxMs = CFG?.vad?.max_utterance_ms ?? 30000;
+  const t0 = performance.now();
+  let spokeAt = 0, lastLoud = 0;
+
+  const tick = () => {
+    if (!recording) return;
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+    const rms = Math.sqrt(sum / buf.length);
+    $("level").style.width = Math.min(100, (rms / (thr * 3)) * 100) + "%";
+
+    const now = performance.now();
+    if (rms > thr) { if (!spokeAt) spokeAt = now; lastLoud = now; }
+    // On ne coupe qu'après avoir entendu de la parole, puis un silence assez long.
+    if (spokeAt && now - lastLoud > silenceMs) return stopRec();
+    if (now - t0 > maxMs) return stopRec();
+    rafId = requestAnimationFrame(tick);
+  };
+  rafId = requestAnimationFrame(tick);
+}
+
+function stopRec() {
+  if (!recording) return;
+  recording = false;
+  cancelAnimationFrame(rafId);
+  $("level").style.width = "0";
+  $("btnMic").classList.remove("rec");
+  $("btnMic").textContent = "🎤";
+  try { recorder.stop(); } catch {}
+  media?.getTracks().forEach((t) => t.stop());
+  audioCtx?.close().catch(() => {});
+}
+
+async function onRecStop() {
+  if (!chunks.length) return;
+  const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+  if (blob.size < 1200) { // quasiment rien enregistré
+    addMsg("sys", "Aucune parole détectée.");
+    if (handsFree && pipelineOn) setTimeout(startRec, 400);
+    return;
+  }
+  setBusy(true); thinking(true);
+  const fd = new FormData();
+  fd.append("file", blob, "input.webm");
+  try {
+    const d = await api("/api/chat_audio", { method: "POST", body: fd });
+    thinking(false);
+    if (d.error) {
+      addMsg("sys", d.error);
+      if (handsFree && pipelineOn) setTimeout(startRec, 500);
+      return;
+    }
+    if (d.user) addMsg("user", d.user);
+    showReply(d);
+  } catch (e) {
+    thinking(false);
+    addMsg("error", "⚠️ " + e.message);
+    toggleHands(false);
+  } finally { setBusy(false); }
+}
+
+/* ----------------------------------------------------------- événements */
+$("btnPipe").onclick = () => setPipeline(!pipelineOn);
+$("btnHands").onclick = () => {
+  toggleHands();
+  if (handsFree && !busy && !recording) startRec();
+  else if (!handsFree && recording) stopRec();
+  toast(handsFree ? "Mains-libres activé" : "Mains-libres désactivé", "ok");
+};
+$("btnSend").onclick = () => sendText($("input").value);
+$("btnMic").onclick = () => (recording ? stopRec() : startRec());
+$("btnCfg").onclick = () => $("panel").classList.toggle("open");
+
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendText($("input").value); }
+});
+$("input").addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 150) + "px";
+});
+
+$("btnClear").onclick = async () => {
+  try {
+    await api("/api/clear", { method: "POST" });
+    log.innerHTML = "";
+    addMsg("sys", "Historique effacé.");
+    toast("Historique effacé", "ok");
+  } catch (e) { toast(e.message, "err"); }
+};
+
+for (const [id, out, fmt] of [
+  ["llmTemp", "tempV", (v) => v], ["ttsSteps", "stepsV", (v) => v],
+  ["ttsSpeed", "speedV", (v) => v], ["ttsSil", "silV", (v) => v],
+  ["vadThr", "vadV", (v) => v], ["vadSil", "silmsV", (v) => v],
+]) $(id).addEventListener("input", (e) => ($(out).textContent = fmt(e.target.value)));
+
+$("llmModelSel").addEventListener("change", (e) => {
+  if (e.target.value) $("llmModel").value = e.target.value;
+});
+
+$("btnDiscover").onclick = async () => {
+  const b = $("btnDiscover"); b.disabled = true; b.textContent = "…";
+  try {
+    // On enregistre l'URL avant d'interroger : la découverte lit la config.
+    await api("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ llm: { base_url: $("llmUrl").value.trim() } }),
+    });
+    const d = await api("/api/models");
+    if (d.models?.length) { fillModels(d.models); toast(`${d.models.length} modèle(s) trouvé(s)`, "ok"); }
+    else toast("Aucun modèle : vérifie l'URL et que le serveur tourne.", "err");
+    checkLlm();
+  } catch (e) { toast(e.message, "err"); }
+  finally { b.disabled = false; b.textContent = "🔍"; }
+};
+
+$("btnSave").onclick = async () => {
+  const b = $("btnSave"); b.disabled = true;
+  try {
+    await api("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectCfg()),
+    });
+    await loadAll();
+    toast("Paramètres enregistrés", "ok");
+  } catch (e) { toast("Refusé : " + e.message, "err"); }
+  finally { b.disabled = false; }
+};
+
+$("btnReload").onclick = async () => { await loadAll(); toast("Paramètres rechargés", "ok"); };
+
+$("btnTest").onclick = async () => {
+  const b = $("btnTest"); b.disabled = true; b.textContent = "⏳ Synthèse…";
+  $("ttsHint").textContent = "Le premier appel télécharge le modèle Supertonic (peut être long).";
+  try {
+    const r = await fetch(API("/api/tts_test"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: "Bonjour, je suis VoxTria, ton assistant vocal local.",
+        voice: $("ttsVoice").value,
+        total_steps: parseInt($("ttsSteps").value, 10),
+        speed: parseFloat($("ttsSpeed").value),
+        silence_duration: parseFloat($("ttsSil").value),
+      }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    const url = URL.createObjectURL(await r.blob());
+    new Audio(url).play();
+    $("ttsHint").textContent = "";
+    toast("Voix testée", "ok");
+  } catch (e) {
+    $("ttsHint").innerHTML = "";
+    $("ttsHint").textContent = "⚠️ " + e.message;
+    $("ttsHint").className = "hint warn";
+    toast("Échec du test", "err");
+  } finally { b.disabled = false; b.textContent = "▶️ Tester la voix"; }
+};
+
+$("btnUpload").onclick = () => $("fileVoice").click();
+$("fileVoice").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("file", f, f.name);
+  try {
+    const d = await api("/api/upload_voice", { method: "POST", body: fd });
+    await loadAll();
+    $("ttsVoice").value = d.voice;
+    toast(`Voix « ${d.name} » chargée`, "ok");
+  } catch (err) { toast(err.message, "err"); }
+  finally { e.target.value = ""; }
+};
+
+$("btnDelVoice").onclick = async () => {
+  const v = $("ttsVoice").value;
+  if (!v.startsWith("custom:")) { toast("Sélectionne une voix clonée.", "err"); return; }
+  const name = v.slice(7);
+  if (!confirm(`Supprimer définitivement la voix « ${name} » ?`)) return;
+  try {
+    await api("/api/voices/" + encodeURIComponent(name), { method: "DELETE" });
+    await loadAll();
+    toast("Voix supprimée", "ok");
+  } catch (e) { toast(e.message, "err"); }
+};
+
+/* ------------------------------------------------------------ démarrage */
+(async function init() {
+  try {
+    await loadAll();
+    addMsg("sys", "Bienvenue 👋 Démarre le pipeline, puis écris ou clique sur 🎤.");
+  } catch (e) {
+    addMsg("error", "Impossible de charger la configuration : " + e.message);
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    $("btnMic").disabled = true;
+    $("btnMic").title = "Micro indisponible (nécessite HTTPS ou localhost)";
+  }
+  setInterval(() => { if (!busy) checkLlm(); }, 20000);
+})();
+</script>
+</body>
+</html>
