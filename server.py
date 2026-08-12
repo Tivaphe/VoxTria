@@ -17,6 +17,7 @@ Variables d'environnement :
 """
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import logging
 import os
@@ -27,7 +28,12 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, File, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    StreamingResponse,
+)
 from starlette.concurrency import run_in_threadpool
 
 from config_schema import (
@@ -361,6 +367,52 @@ async def chat_text(payload: dict = Body(...)):
         return res
     except Exception as e:
         return fail(str(e), 502, e)
+
+
+@app.post("/api/chat_stream")
+async def chat_stream(payload: dict = Body(...)):
+    """Pipeline en streaming (SSE) : une phrase synthétisée à la fois.
+
+    Le client reçoit le texte au fil de l'eau et peut jouer le premier audio
+    sans attendre la fin de la génération.
+    """
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return JSONResponse({"error": "Message vide."}, 400)
+    if len(text) > 10000:
+        return JSONResponse({"error": "Message trop long (10 000 caractères max)."}, 413)
+
+    async def events():
+        q: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def produce():
+            # Le pipeline est synchrone (HTTP + ONNX) : il tourne dans un
+            # thread et pousse ses événements vers la boucle asyncio.
+            try:
+                for ev in assistant.respond_stream(text, OUT_DIR):
+                    if ev.get("audio"):
+                        ev["audio_url"] = f"/api/audio/{ev['audio']}"
+                    loop.call_soon_threadsafe(q.put_nowait, ev)
+            except Exception as e:  # pragma: no cover - filet de sécurité
+                log.error("stream: %s", e)
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(e)})
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        loop.run_in_executor(None, produce)
+        while True:
+            ev = await q.get()
+            if ev is None:
+                break
+            yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+        purge_old_audio()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/chat_audio")
