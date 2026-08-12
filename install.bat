@@ -36,6 +36,12 @@ echo [3/3] Installation des dependances (peut prendre quelques minutes)...
 call ".venv\Scripts\python.exe" -m pip install -r requirements.txt
 if errorlevel 1 ( echo [ERREUR] Echec installation dependances & pause & exit /b 1 )
 
+REM --- Config locale (non versionnee, peut contenir une cle API) ---
+if not exist "config.json" (
+    copy /y "config.example.json" "config.json" >nul
+    echo     config.json cree depuis config.example.json
+)
+
 echo.
 echo === Installation terminee avec succes ! ===
 echo Lance maintenant "run.bat" pour demarrer l'assistant.

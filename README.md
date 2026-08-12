@@ -120,12 +120,16 @@ Crée `./voices/ma_voix.json`, qui apparaît automatiquement dans la liste des v
 ## 🗂️ Architecture
 
 ```
-voice_assistant/
+VoxTria/
 ├── server.py            # API FastAPI + sert l'interface
 ├── pipeline.py          # briques ASR / LLM / TTS + orchestrateur
+├── config_schema.py     # schéma de configuration validé (Pydantic)
 ├── clone_voice.py       # clonage de voix local (optionnel, GPU)
-├── config.json          # configuration (modifiable via l'UI)
-├── requirements.txt
+├── config.example.json  # modèle de configuration (versionné)
+├── config.json          # config locale — NON versionnée (peut contenir une clé API)
+├── requirements.txt / requirements-dev.txt
+├── pyproject.toml       # config pytest + ruff
+├── tests/               # tests (78) — aucun modèle requis
 ├── static/
 │   └── index.html       # interface web
 ├── voices/              # voix clonées (.json) — créé à l'usage
@@ -147,10 +151,57 @@ voice_assistant/
 | POST | `/api/chat_text` | pipeline depuis texte |
 | POST | `/api/chat_audio` | pipeline depuis audio (micro) |
 | POST | `/api/clear` | efface l'historique |
+| GET | `/api/history` | historique courant |
+| GET | `/api/config/schema` | schéma JSON de la config (pour l'UI) |
+| DELETE | `/api/voices/{nom}` | supprime une voix clonée |
+| GET | `/api/health` | état du service |
+
+> `GET /api/voices` renvoie les presets sans charger le moteur TTS.
+> Ajoute `?probe=true` pour interroger réellement Supertonic (déclenche le
+> téléchargement du modèle au premier appel).
+
+---
+
+## 🔒 Sécurité
+
+VoxTria est prévu pour tourner **en local, sans authentification**. Quelques
+garde-fous sont en place, à connaître avant de l'exposer sur un réseau :
+
+- **Protection CSRF** : les requêtes non-GET portant une origine externe sont
+  refusées (403). Sans cela, n'importe quel site ouvert dans ton navigateur
+  pourrait piloter l'assistant. Autorise d'autres origines avec
+  `VOXTRIA_ALLOW_ORIGINS=https://mon-domaine`.
+- **Uploads confinés** : les voix clonées sont écrites uniquement dans
+  `./voices/`, sous un nom assaini, après validation du JSON.
+- **Config validée** : toutes les valeurs sont bornées (schéma Pydantic) ;
+  `custom_style_path` ne peut pointer que dans `./voices/`.
+- **Clé API** : préfère `VOXTRIA_API_KEY` (variable d'environnement) plutôt que
+  `config.json`. La clé n'est jamais renvoyée au navigateur.
+- **Traces d'erreur** : masquées par défaut, activables avec `VOXTRIA_DEBUG=1`.
+
+> ⚠️ N'expose pas ce serveur sur Internet tel quel : place-le derrière un
+> reverse proxy avec authentification.
+
+---
+
+## 🧪 Développement
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q          # 78 tests, aucun modèle requis
+ruff check .
+```
+
+Les tests couvrent l'API, la validation de configuration et la logique du
+pipeline : ils tournent en quelques secondes sans télécharger Whisper ni
+Supertonic.
 
 ---
 
 ## ⚙️ Configuration (`config.json`)
+
+> `config.json` **n'est pas versionné** (il peut contenir une clé API). Il est
+> créé automatiquement depuis `config.example.json` au premier lancement.
 
 ```jsonc
 {
@@ -173,6 +224,9 @@ Tout est éditable depuis l'interface (⚙️).
 | Le micro ne transcrit pas | installe **ffmpeg** et ajoute-le au PATH |
 | VAD coupe trop tôt/tard | ajuste *Sensibilité* et *Durée de silence* dans ⚙️ |
 | `Torch not compiled with CUDA` (clonage) | normal sur CPU : le clonage local exige un GPU |
+| `503` sur la page d'accueil | `static/index.html` est absent ; l'API reste utilisable sur `/docs` |
+| `403 Origine non autorisée` | ajoute ton origine dans `VOXTRIA_ALLOW_ORIGINS` |
+| Changement de modèle Whisper sans effet | corrigé : le modèle est rechargé automatiquement |
 
 ---
 

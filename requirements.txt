@@ -1,8 +1,9 @@
-fastapi
-uvicorn[standard]
-python-multipart
-faster-whisper
-supertonic
-requests
-soundfile
-numpy
+# Bornes hautes volontaires : l'API de supertonic a déjà changé entre versions
+# (voir les contournements retirés de pipeline.py). Relever après vérification.
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27,<1.0
+python-multipart>=0.0.9,<1.0
+pydantic>=2.6,<3.0
+faster-whisper>=1.0,<2.0
+supertonic>=1.3,<2.0
+requests>=2.31,<3.0

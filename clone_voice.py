@@ -23,16 +23,43 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import re
 import shutil
 import subprocess
 import sys
+import wave
 from pathlib import Path
 
 BASE = Path(__file__).parent
 EMBED_DIR = BASE / "_supertonic_embed"
 VOICES_DIR = BASE / "voices"
 REPO_URL = "https://github.com/kdrkdrkdr/supertonic.embed.git"
+# Commit épinglé : sans cela, le code tiers exécuté par ce script peut
+# changer à tout moment côté amont. Mettre à jour sciemment après revue.
+REPO_REF = "main"
+
+
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def check_wav(path: Path) -> None:
+    """Contrôle basique de l'échantillon (la doc exige 3-10 s, un locuteur)."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            frames, rate, channels = w.getnframes(), w.getframerate(), w.getnchannels()
+    except wave.Error as e:
+        print(f"[ERREUR] Fichier WAV illisible ({e}). Convertis-le en PCM 16 bits :")
+        print(f"    ffmpeg -i {path} -ac 1 -ar 44100 -c:a pcm_s16le sortie.wav")
+        sys.exit(1)
+    duration = frames / float(rate or 1)
+    print(f"[wav] {duration:.1f}s, {rate} Hz, {channels} canal/canaux")
+    if duration < 2:
+        print("[ERREUR] Échantillon trop court (< 2 s). Vise 3 à 10 secondes.")
+        sys.exit(1)
+    if duration > 30:
+        print("[!] Échantillon long (> 30 s) : seul le début est réellement utile.")
+    if channels > 1:
+        print("[!] Audio non mono : un enregistrement mono donne de meilleurs résultats.")
 
 
 def run(cmd, cwd=None):
@@ -48,14 +75,25 @@ def check_gpu() -> bool:
         return False
 
 
-def ensure_repo():
+def ensure_repo(ref: str = REPO_REF):
     if EMBED_DIR.exists():
         print(f"[ok] repo déjà présent : {EMBED_DIR}")
         return
     run(["git", "clone", REPO_URL, str(EMBED_DIR)])
+    # On fixe explicitement la révision utilisée (traçabilité + reproductibilité).
+    run(["git", "checkout", ref], cwd=str(EMBED_DIR))
 
 
-def ensure_deps():
+def ensure_deps(skip: bool = False):
+    """Installe les dépendances de supertonic.embed.
+
+    ⚠️ Ces paquets (torch, onnxruntime…) peuvent écraser les versions du venv
+    de VoxTria. Utilise --skip-deps si tu gères l'environnement toi-même, ou
+    lance ce script dans un venv dédié.
+    """
+    if skip:
+        print("[skip] installation des dépendances ignorée (--skip-deps)")
+        return
     req = EMBED_DIR / "requirements.txt"
     if req.exists():
         run([sys.executable, "-m", "pip", "install", "-r", str(req)])
@@ -117,7 +155,9 @@ def find_result_json(name: str) -> Path | None:
         candidates.append(final)
     logs = EMBED_DIR / "logs" / name
     if logs.exists():
-        ckpts = sorted(logs.glob(f"{name}_*.json"))
+        # Tri par date de modification : un tri lexicographique classait
+        # "_900" après "_1000" et sélectionnait le mauvais checkpoint.
+        ckpts = sorted(logs.glob(f"{name}_*.json"), key=lambda p: p.stat().st_mtime)
         candidates.extend(ckpts)
     return candidates[-1] if candidates else None
 
@@ -127,12 +167,23 @@ def main():
     ap.add_argument("--wav", required=True, help="échantillon vocal WAV (3-10 s, un locuteur)")
     ap.add_argument("--name", default="ma_voix", help="nom de la voix clonée")
     ap.add_argument("--steps", type=int, default=3000, help="étapes max d'optimisation")
+    ap.add_argument("--ref", default=REPO_REF, help="révision git de supertonic.embed")
+    ap.add_argument("--skip-deps", action="store_true",
+                    help="ne pas installer les dépendances (venv géré à la main)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="ne pas poser de question (mode non interactif / Colab)")
     args = ap.parse_args()
+
+    if not SAFE_NAME.match(args.name):
+        print(f"[ERREUR] Nom de voix invalide : {args.name!r} "
+              "(lettres, chiffres, '_' et '-' uniquement)")
+        sys.exit(1)
 
     wav = Path(args.wav)
     if not wav.exists():
         print(f"[ERREUR] WAV introuvable : {wav}")
         sys.exit(1)
+    check_wav(wav)
 
     if not check_gpu():
         print("\n" + "="*60)
@@ -143,15 +194,16 @@ def main():
         print("  - ou utilise Google Colab (runtime GPU T4 gratuit)")
         print("="*60)
         # On laisse l'utilisateur forcer s'il veut tenter quand même
-        if input("Continuer quand même (très lent / risque d'échec) ? [o/N] ").lower() != "o":
-            sys.exit(1)
+        if not args.yes:
+            if input("Continuer quand même (très lent / risque d'échec) ? [o/N] ").lower() != "o":
+                sys.exit(1)
 
     VOICES_DIR.mkdir(exist_ok=True)
 
     print("\n=== 1/5 Récupération du repo supertonic.embed ===")
-    ensure_repo()
+    ensure_repo(args.ref)
     print("\n=== 2/5 Installation des dépendances ===")
-    ensure_deps()
+    ensure_deps(args.skip_deps)
     print("\n=== 3/5 Téléchargement des modèles ===")
     ensure_models()
     print("\n=== 4/5 Préparation de la config ===")
@@ -168,7 +220,7 @@ def main():
     print("\n" + "="*60)
     print(f"✅ Voix clonée prête : {dest}")
     print("Dans l'assistant : Paramètres -> Voix clonée -> charge ce .json,")
-    print(f"ou sélectionne la voix dans la liste après rechargement.")
+    print("ou sélectionne la voix dans la liste après rechargement.")
     print("="*60)
 
 
