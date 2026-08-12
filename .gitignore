@@ -38,3 +38,10 @@ Thumbs.db
 .env
 *.key
 secrets.json
+
+# Config locale : peut contenir une cle API (voir config.example.json)
+config.json
+config.json.tmp
+
+# Caches d'outils
+.ruff_cache/

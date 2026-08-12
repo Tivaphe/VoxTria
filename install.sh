@@ -32,6 +32,12 @@ echo "[2/3] Mise a jour de pip..."
 echo "[3/3] Installation des dependances (peut prendre quelques minutes)..."
 ./.venv/bin/python -m pip install -r requirements.txt
 
+# --- Config locale (non versionnee, peut contenir une cle API) ---
+if [ ! -f "config.json" ]; then
+    cp config.example.json config.json
+    echo "    config.json cree depuis config.example.json"
+fi
+
 echo
 echo "=== Installation terminee avec succes ! ==="
 echo "Lance maintenant ./run.sh pour demarrer l'assistant."
