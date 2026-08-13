@@ -27,8 +27,117 @@ Test rapide de voix
 🎭 Voix clonées (upload JSON Voice Builder ou clonage local)
 ASR : choix du modèle Whisper + réglages VAD
 🗣️ Expression tags (`<laugh>`, `<sigh>`, `<breath>`…) insérés par le LLM
+🌐 **Traduction live** : traduit en quasi temps réel un flux audio (YouTube
+live, onglet navigateur, podcast…) dans la langue de ton choix, via un
+LLM de traduction (ex. `tencent/Hy-MT2-1.8B-GGUF` via llama.cpp)
 🖥️ Interface web soignée (thème néon), servie en local
 🚀 Scripts d'installation et de lancement automatiques (`.bat` / `.sh`)
+---
+
+## 🌐 Traduction live
+
+VoxTria peut traduire en quasi temps réel un flux audio dans la langue
+de ton choix. Trois sources sont supportées :
+
+| Source | Mode | Latence ajoutée | Pré-requis |
+|---|---|---|---|
+| **YouTube (sous-titres)** | le + fiable et rapide — pas d'ASR | ~1 s + retard des subs (2-4 s) | la vidéo a des sous-titres |
+| **Onglet navigateur** | capture l'audio de n'importe quel onglet (Twitch, Zoom, podcast) | ~1-2 s | Chrome/Edge (le navigateur affiche un prompt) |
+| **URL générique** | télécharge via `yt-dlp` + transcrit via Whisper | ~3-5 s | `pip install yt-dlp` + `ffmpeg` |
+
+### Pipeline
+
+```
+[source audio] → segment texte (~1 phrase)
+        ↓
+[LLM de traduction]   (ex. tencent/Hy-MT2-1.8B-GGUF via llama.cpp)
+        ↓
+[TTS Supertonic]      (voix/langue déjà câblés dans le pipeline existant)
+        ↓
+[audio lu dans les haut-parleurs]   (file audio côté navigateur, sans blanc)
+```
+
+Sur une RTX 2000 Ada (16 Go) on fait tourner en parallèle Whisper
+`large-v3` (float16) + llama.cpp avec Hy-MT2 Q4_K_M + Supertonic, avec
+~10 Go de VRAM libre.
+
+### Configuration rapide (YouTube → Français)
+
+1. **Télécharge Hy-MT2** (une seule fois, ~1-2 Go) :
+   ```bash
+   # Option A : depuis l'UI
+   #   ⚙️ → 🌐 Traduction live → ⬇️ Télécharger le modèle Hy-MT2 → 🔍 Lister
+   #   → choisir Q4_K_M (1.13 Go, bon compromis) → ⬇️ Télécharger
+   #
+   # Option B : en CLI
+   python -c "from translate import list_hymt2_quants, download_hymt2; \\
+              [print(q) for q in list_hymt2_quants()]; \\
+              download_hymt2('Q4_K_M', './models', '1.8B')"
+   ```
+   Le modèle est alors dans `./models/Hy-MT2-1.8B-Q4_K_M.gguf`.
+
+2. **Démarre llama.cpp avec Hy-MT2** (sur un port dédié) :
+   ```bash
+   llama-server -m ./models/Hy-MT2-1.8B-Q4_K_M.gguf --port 8081
+   ```
+   (Le repo HF contient aussi Q6_K et Q8_0 si tu veux plus de qualité
+   au prix de la RAM.)
+
+3. **Démarre VoxTria** (`.sh` / `.bat` ou `uvicorn server:app`).
+
+4. Dans l'UI, ouvre ⚙️ → section **🌐 Traduction live** :
+   - **Source** : `YouTube — sous-titres`
+   - **URL** : colle l'URL YouTube
+   - **Cible langue** : `Français`
+   - **URL du LLM de traduction** : `http://localhost:8081/v1`
+   - **Modèle** : `Hy-MT2-1.8B-Q4_K_M`
+   - ▶ **Démarrer**
+
+5. Le son traduit sort dans tes haut-parleurs, et les segments
+   apparaissent en bas du chat avec leur source et leur timing.
+
+### Paramètres d'inférence (avancé)
+
+Les paramètres recommandés par Tencent pour Hy-MT2 (1.8B & 7B) sont
+**appliqués par défaut** :
+
+| Paramètre | Défaut | Effet |
+|---|---:|---|
+| `temperature` | 0.7 | contrôle le caractère aléatoire de la sélection des tokens |
+| `top_p` | 0.6 | nucleus sampling (ne garde que les tokens cumulant p% de proba) |
+| `top_k` | 20 | limite aux 20 tokens les plus probables |
+| `repetition_penalty` | 1.05 | pénalise les répétitions (>1 = moins de répétitions) |
+| `max_tokens` | 4096 | longueur max générée (automatiquement bornée par la longueur d'entrée) |
+
+Tous sont modifiables depuis l'UI (⚙️ → 🌐 → ▸ Paramètres d'inférence).
+Tu peux les ajuster si tu utilises un autre modèle de traduction (NLLB,
+MADLAD, etc.) ou si tu veux plus de déterminisme.
+
+> **Pourquoi pas `temperature=0` ?** Hy-MT2 a été entraîné avec sampling
+> (`0.7/0.6/20/1.05`) — mettre la température à 0 *dégrade* sa qualité
+> de traduction, contrairement à un LLM généraliste.
+
+> Tu peux laisser `URL du LLM` à `auto` pour réutiliser le LLM du chat
+> vocal, mais un llama.cpp dédié à Hy-MT2 est **fortement recommandé** :
+> Hy-MT2 a été entraîné pour la traduction et écrasera en qualité tout
+> LLM généraliste sur cette tâche.
+
+### Endpoints utiles (intégration / debug)
+
+| Méthode | Route | Rôle |
+|---|---|---|
+| `POST` | `/api/translate/text` | traduit un texte (`{text, src, tgt, tts}`) |
+| `POST` | `/api/translate/session/start` | démarre une session (`{source, url, src, tgt}`) |
+| `POST` | `/api/translate/session/{id}/segment` | pousse un segment, renvoie la traduction + audio |
+| `GET`  | `/api/translate/session/{id}/segments?since=N` | récupère les segments (utile pour un worker Python) |
+| `GET`  | `/api/translate/youtube/next?video_id=…&last_t_ms=…` | helper : prochain segment timedtext |
+| `POST` | `/api/translate/session/{id}/stop` | ferme la session |
+| `GET`  | `/api/translate/hymt2/list?size=1.8B\|7B` | liste les quantizations HF |
+| `POST` | `/api/translate/hymt2/download` | télécharge une quantization (`{quant, size, out_dir}`) |
+
+> Les sessions sont en mémoire (LRU borné à 16). Elles sont perdues au
+> redémarrage du serveur — c'est volontaire, ce sont des flux éphémères.
+
 ---
 🚀 Démarrage rapide
 Windows

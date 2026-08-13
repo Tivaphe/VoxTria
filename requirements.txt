@@ -7,3 +7,12 @@ pydantic>=2.6,<3.0
 faster-whisper>=1.0,<2.0
 supertonic>=1.3,<2.0
 requests>=2.31,<3.0
+
+# Optionnel : mode "url_stream" de la traduction live (yt-dlp + ffmpeg).
+# Sans cela, les modes "youtube_sub" et "tab_audio" fonctionnent quand même.
+# yt-dlp>=2024.1,<2026
+
+# Optionnel : téléchargement des quantizations Hy-MT2 depuis Hugging Face
+# (sinon, l'UI affiche un message et on peut passer par huggingface-cli).
+# huggingface_hub>=0.20,<1.0
+

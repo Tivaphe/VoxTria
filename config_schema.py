@@ -146,11 +146,77 @@ class VADCfg(_Base):
     max_utterance_ms: int = Field(30000, ge=1000, le=300000)
 
 
+class TranslateCfg(_Base):
+    """Configuration du mode traduction live.
+
+    Ces réglages sont indépendants du chat vocal (qui continue d'utiliser
+    `llm` et `tts`). Le LLM ciblé peut être différent (ex. Hy-MT2 servi
+    par llama.cpp sur un autre port) — il suffit de renseigner `base_url`
+    et `model` ; sinon on hérite de la section `llm` du chat.
+
+    Les paramètres d'inférence (temperature/top_p/top_k/repetition_penalty)
+    sont **spécifiques au modèle de traduction** et ne sont pas partagés
+    avec le LLM du chat : un LLM généraliste veut temperature ~0.7,
+    Hy-MT2 veut la même chose, mais d'autres traducteurs (NLLB, MADLAD)
+    peuvent exiger d'autres valeurs. Tout est modifiable depuis l'UI.
+    """
+    # 'auto' = réutilise llm.base_url / llm.model ; sinon URL dédiée.
+    base_url: str = "auto"
+    model: str = ""                           # vide = réutilise llm.model
+    source: Literal["youtube_sub", "tab_audio", "url_stream"] = "youtube_sub"
+    source_lang: str = "en"
+    target_lang: str = "fr"
+    # Prompt système injecté au LLM de traduction. Hy-MT2 attend
+    # "translate the {src} into {tgt}" — on garde ce défaut.
+    system_prompt: str = "translate the {src} into {tgt}"
+    # YouTube : poll interval (secondes) — plus bas = plus réactif, plus de requêtes.
+    poll_interval_s: float = Field(1.0, ge=0.2, le=10.0)
+    # yt-dlp : durée d'un segment audio avant transcription.
+    chunk_seconds: float = Field(4.0, ge=1.0, le=20.0)
+    # Lecture auto des wav côté client (sinon juste log texte).
+    auto_play: bool = True
+    # On coupe l'historique de conversation du chat si une session live
+    # tourne, pour éviter que les segments soient injectés au LLM principal.
+    # (Le LLM de traduction n'est de toute façon pas `Assistant.llm` —
+    #  ce booléen est juste un garde-fou documentaire.)
+    isolate_from_chat: bool = True
+
+    # ---------- paramètres d'inférence (recommandations Tencent pour Hy-MT2) -
+    # Doc : "For 1.8B and 7B, we recommend temperature 0.7, top_p 0.6,
+    # top_k 20, repetition_penalty 1.05". On les expose en defaults
+    # modifiables depuis l'UI.
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
+    top_p: float = Field(0.6, ge=0.0, le=1.0)
+    top_k: int = Field(20, ge=0, le=200)
+    repetition_penalty: float = Field(1.05, ge=0.5, le=2.0)
+    max_tokens: int = Field(4096, ge=1, le=32768)
+
+    @field_validator("base_url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v or v.lower() == "auto":
+            return "auto"
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("translate.base_url doit être 'auto' ou une URL http(s).")
+        return normalize_base_url(v)
+
+    @field_validator("source_lang", "target_lang")
+    @classmethod
+    def _lang(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if len(v) != 2 or not v.isalpha():
+            raise ValueError("Code langue attendu sur 2 lettres (ex. 'fr', 'en').")
+        return v
+
+
 class Config(_Base):
     asr: ASRCfg = Field(default_factory=ASRCfg)
     llm: LLMCfg = Field(default_factory=LLMCfg)
     tts: TTSCfg = Field(default_factory=TTSCfg)
     vad: VADCfg = Field(default_factory=VADCfg)
+    translate: TranslateCfg = Field(default_factory=TranslateCfg)
 
 
 def validate_config(raw: dict | None) -> dict:
