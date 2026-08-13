@@ -27,7 +27,7 @@ Test rapide de voix
 🎭 Voix clonées (upload JSON Voice Builder ou clonage local)
 ASR : choix du modèle Whisper + réglages VAD
 🗣️ Expression tags (`<laugh>`, `<sigh>`, `<breath>`…) insérés par le LLM
-🌐 **Traduction live** : traduit en quasi temps réel un flux audio (YouTube
+🌐 Traduction live: traduit en quasi temps réel un flux audio (YouTube
 live, onglet navigateur, podcast…) dans la langue de ton choix, via un
 LLM de traduction (ex. `tencent/Hy-MT2-1.8B-GGUF` via llama.cpp)
 🖥️ Interface web soignée (thème néon), servie en local
