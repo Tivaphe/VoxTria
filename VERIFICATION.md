@@ -90,10 +90,12 @@ Hors périmètre du code (blocages plateforme de l'époque) : rien à vérifier.
 
 - ~~`clone_voice.py` : `REPO_REF = "main"`~~ → **épinglé sur `ec5325e`**
   (résolu au SHA de `main` au 2026-08-12), checkout idempotent.
-- ~~CI non activée~~ → `.github/workflows/ci.yml` en place.
-- ~~Producteur SSE non annulé à la déconnexion~~ → drapeau `stop` +
+- Producteur SSE non annulé à la déconnexion → **corrigé** : drapeau `stop` +
   `gen.close()` (libère le verrou sans attendre le GC) + purge systématique,
   test dédié de déconnexion précoce.
+- CI : activation **tentée mais refusée par GitHub** (`remote rejected:
+  without workflows permission`, 2026-08-12) — le workflow reste prêt dans
+  `ci/` ; un push depuis un token avec le scope `workflows` l'activera.
 - Pas de test navigateur (VAD + queue audio relus mais exercés sous Node
   uniquement de façon ponctuelle) — **toujours ouvert**.
 

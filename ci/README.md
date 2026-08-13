@@ -2,9 +2,10 @@
 
 Le workflow GitHub Actions est fourni ici plutôt que dans `.github/workflows/`
 car le jeton utilisé pour pousser cette branche n'a pas la permission
-`workflows` (GitHub refuse alors le push).
+`workflows` (GitHub refuse alors le push). **Tentative confirmée le
+2026-08-12 : `remote rejected … without workflows permission`.**
 
-**Pour l'activer**, copie le fichier à son emplacement définitif :
+**Pour l'activer** (depuis un compte dont le token a le scope `workflows`) :
 
 ```bash
 mkdir -p .github/workflows
