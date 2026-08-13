@@ -82,6 +82,18 @@ _SENT_END = re.compile(r"[.!?…]+")
 _CLOSERS = "\"'»)]}”’"
 
 
+def _has_open_quote(s: str) -> bool:
+    """La phrase contient-elle une citation non refermée ?
+
+    Couper « au milieu d'un « … » produit deux fragments aux guillemets
+    orphelins, mal prononcés. Si le LLM ne referme jamais, le garde-fou
+    `max_len` force quand même l'émission au-delà de ~220 caractères.
+    """
+    if s.count("«") > s.count("»") or s.count("“") > s.count("”"):
+        return True
+    return s.count('"') % 2 == 1
+
+
 def split_sentences(buf: str, final: bool = False, max_len: int = 220) -> tuple[list[str], str]:
     """Extrait les phrases complètes d'un tampon de texte en cours de réception.
 
@@ -105,6 +117,17 @@ def split_sentences(buf: str, final: bool = False, max_len: int = 220) -> tuple[
         end = m.end()
         while end < len(buf) and buf[end] in _CLOSERS:
             end += 1
+        # Typographie française : le fermant suit une espace (« Bonjour. »).
+        # Sans cela la coupure tombait AVANT le » et isolait un fragment
+        # « ...Bonjour. / » dit-il. — guillemets orphelins des deux côtés.
+        if end < len(buf) and buf[end] in " \t":
+            k = end
+            while k < len(buf) and buf[k] in " \t":
+                k += 1
+            if k < len(buf) and buf[k] in "»)]}”’\"":
+                end = k
+                while end < len(buf) and buf[end] in _CLOSERS:
+                    end += 1
         # Frontière non confirmée : la suite du flux peut la prolonger.
         if end >= len(buf):
             if not final:
@@ -113,13 +136,30 @@ def split_sentences(buf: str, final: bool = False, max_len: int = 220) -> tuple[
             continue
 
         head = buf[start:m.start()]
-        word = re.split(r"[\s(«\"']+", head.strip())[-1].lower() if head.strip() else ""
+        head_txt = head.strip()
+        word = re.split(r"[\s(«\"']+", head_txt)[-1].lower() if head_txt else ""
         word = word.strip(".,;:!?")
-        if m.group() == "." and (word in _ABBREV or (len(word) == 1 and word.isalpha())):
+        # Marqueur de liste numérotée (« 1. Premier point ») : le chiffre OUvre
+        # la phrase — sinon « 1. » partait seul au TTS. Un nombre qui TERMINE la
+        # phrase (« Tu as 20. ») reste une coupure valide.
+        is_list_marker = (
+            word.isdigit()
+            and len(word) <= 2
+            and head_txt.lstrip("(«\"'") == word
+        )
+        # Pas de coupure sur : abréviation connue (M., Dr.), initiale isolée
+        # (« J. Dupont ») ou marqueur de liste.
+        if m.group() == "." and (
+            word in _ABBREV or (len(word) == 1 and word.isalpha()) or is_list_marker
+        ):
             continue
 
         phrase = buf[start:end].strip()
         if phrase:
+            # Citation non refermée (« … . / suite du flux / » …) : on attend
+            # la fermeture plutôt que d'émettre un fragment entre guillemets.
+            if not final and _has_open_quote(phrase):
+                continue
             out.append(phrase)
         start = end
 

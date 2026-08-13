@@ -22,6 +22,78 @@ def test_strip_expression_tags(tmp_home, brut, attendu):
     assert strip_expression_tags(brut) == attendu
 
 
+# --- Découpage en phrases (streaming) ------------------------------------
+@pytest.mark.parametrize("buf, attendu_phrases", [
+    # Faux amis classiques : pas de coupure
+    ("Le taux est 3.5, pas 4.", []),                 # décimal
+    ("M. Dupont arrive demain.", []),                # abréviation M.
+    ("On a des pommes, etc. Et rien.", []),          # abréviation etc.
+    ("J. Dupont est là.", []),                       # initiale isolée
+    # Listes numérotées : « 1. » n'ouvre jamais une coupure à lui tout seul
+    ("1. Premier point.", []),
+    ("1. Premier point. 2. Deuxième point. ", ["1. Premier point.", "2. Deuxième point."]),
+    ("(1. Encadré.) ", ["(1. Encadré.)"]),
+    # …mais un nombre qui TERMINE une phrase reste une coupure valide
+    ("Tu as 20. Bravo. ", ["Tu as 20.", "Bravo."]),
+    ("Il est né en 2024. Merci. ", ["Il est né en 2024.", "Merci."]),
+    # Coupure réelle : ponctuation finale + espace
+    ("Bonjour. Comment vas-tu ?", ["Bonjour."]),
+    ("Un. Deux. ", ["Un.", "Deux."]),
+    # Fermants collés (style anglais) : absorbés avant la coupure
+    ('"Bonjour." dit-il. ', ['"Bonjour."', "dit-il."]),
+    ("(Rires.) Suite. ", ["(Rires.)", "Suite."]),
+    # Fermants espacés (typographie française) : idem — c'était le bug
+    ("« Bonjour. » dit-il. ", ["« Bonjour. »", "dit-il."]),
+    ('" Bonjour. " dit-il. ', ['" Bonjour. "', "dit-il."]),
+    # Citation multi-phrases : jamais coupée tant qu'elle n'est pas refermée
+    ("« Un. Deux. » Puis rien. ", ["« Un. Deux. »", "Puis rien."]),
+    ("Un “charmant” garçon. Bref. ", ["Un “charmant” garçon.", "Bref."]),
+    # Pas de ponctuation : rien ne sort tant que le flux continue
+    ("encore du texte sans fin", []),
+])
+def test_split_sentences(tmp_home, buf, attendu_phrases):
+    from pipeline import split_sentences
+    phrases, reste = split_sentences(buf)
+    assert phrases == attendu_phrases
+
+
+def test_split_sentences_flux_decimal_recombine(tmp_home):
+    """Le point d'un décimal arrivant seul ne doit pas couper : on attend la suite."""
+    from pipeline import split_sentences
+    phrases, reste = split_sentences("La note est 3.")
+    assert phrases == [] and reste == "La note est 3."
+    phrases, reste = split_sentences(reste + "5 sur 20. ")
+    assert phrases == ["La note est 3.5 sur 20."]
+
+
+def test_split_sentences_final_vide_le_tampon(tmp_home):
+    from pipeline import split_sentences
+    phrases, reste = split_sentences("Sans ponctuation finale", final=True)
+    assert reste == "Sans ponctuation finale"  # fourni en reste, tranché par l'appelant
+    phrases, _ = split_sentences("Fin normale. ", final=True)
+    assert phrases == ["Fin normale."]
+
+
+def test_split_sentences_garde_fou_longueur(tmp_home):
+    """Un flux sans ponctuation (liste) ne bloque pas la synthèse : coupe de secours."""
+    from pipeline import split_sentences
+    buf = ", ".join(f"élément numéro {i}" for i in range(30))
+    phrases, reste = split_sentences(buf, max_len=120)
+    assert phrases, "la coupe de secours doit produire des fragments"
+    assert all(len(p) <= 125 for p in phrases)
+    # reconstruit le texte sans perte
+    assert (" ".join(phrases) + " " + reste.strip()).replace("  ", " ").startswith("élément numéro 0")
+
+
+def test_split_sentences_guillemets_en_cours_de_flux(tmp_home):
+    """« Bonjour. » reçu en deux morceaux : on attend le » avant de couper."""
+    from pipeline import split_sentences
+    phrases, reste = split_sentences("« Bonjour. ")
+    assert phrases == []                      # » pas encore arrivé
+    phrases, _ = split_sentences(reste + "» il répond. ")
+    assert phrases == ["« Bonjour. »", "il répond."]
+
+
 # --- Normalisation d'URL ---------------------------------------------------
 @pytest.mark.parametrize("entree, attendu", [
     ("http://localhost:8080", "http://localhost:8080/v1"),
