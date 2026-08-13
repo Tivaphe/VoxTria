@@ -21,9 +21,11 @@ import asyncio
 import json as _json
 import logging
 import os
+import threading
 import time
 import traceback
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -39,6 +41,7 @@ from starlette.concurrency import run_in_threadpool
 from config_schema import (
     PRESET_VOICES,
     SAFE_VOICE_NAME,
+    VOICE_RE,
     Config,
     normalize_base_url,
     safe_voice_path,
@@ -334,14 +337,27 @@ def discover_models():
 @app.post("/api/tts_test")
 async def tts_test(payload: dict = Body(...)):
     """Test rapide d'une voix : texte court -> wav, avec les réglages live."""
-    text = str(payload.get("text") or "Bonjour, ceci est un test de voix.")[:1000]
+    text = payload.get("text") or "Bonjour, ceci est un test de voix."
+    if not isinstance(text, str):
+        return JSONResponse({"error": "text doit être une chaîne."}, 400)
+    text = text[:1000]
+    # Le nom de voix est passé tel quel au SDK, qui résout
+    # f"{voice_name}.json" SANS assainir : on borne au schéma connu, comme
+    # partout ailleurs (sinon lecture de .json arbitraire via "../../").
+    voice = payload.get("voice")
+    if voice is not None and (not isinstance(voice, str) or not VOICE_RE.match(voice)):
+        return JSONResponse({"error": "Voix invalide (preset M1-F5 ou custom[:nom])."}, 400)
+    try:
+        steps = None if payload.get("total_steps") is None else int(payload["total_steps"])
+        speed = None if payload.get("speed") is None else float(payload["speed"])
+        silence = None if payload.get("silence_duration") is None else float(payload["silence_duration"])
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "total_steps/speed/silence_duration doivent être numériques."}, 400)
     out, url = new_audio_path("voice_test")
     try:
         await run_in_threadpool(
             assistant.tts.synthesize,
-            text, str(out), payload.get("voice"),
-            payload.get("total_steps"), payload.get("speed"),
-            payload.get("silence_duration"),
+            text, str(out), voice, steps, speed, silence,
         )
         purge_old_audio()
         return FileResponse(out, media_type="audio/wav", filename="voice_test.wav",
@@ -350,14 +366,29 @@ async def tts_test(payload: dict = Body(...)):
         return fail(f"Échec de la synthèse : {e}", 500, e)
 
 
-@app.post("/api/chat_text")
-async def chat_text(payload: dict = Body(...)):
-    """Pipeline depuis un texte (sans micro) : LLM -> TTS."""
-    text = (payload.get("text") or "").strip()
+def _message_text(payload: dict) -> str | JSONResponse:
+    """Extrait `text` du payload — sinon une réponse d'erreur prête à renvoyer.
+
+    Avant : `{"text": 42}` plantait sur AttributeError (int n'a pas .strip())
+    → 500 opaque au lieu d'un 400 explicite.
+    """
+    raw = payload.get("text")
+    if raw is not None and not isinstance(raw, str):
+        return JSONResponse({"error": "text doit être une chaîne."}, 400)
+    text = (raw or "").strip()
     if not text:
         return JSONResponse({"error": "Message vide."}, 400)
     if len(text) > 10000:
         return JSONResponse({"error": "Message trop long (10 000 caractères max)."}, 413)
+    return text
+
+
+@app.post("/api/chat_text")
+async def chat_text(payload: dict = Body(...)):
+    """Pipeline depuis un texte (sans micro) : LLM -> TTS."""
+    text = _message_text(payload)
+    if isinstance(text, JSONResponse):
+        return text
     out, url = new_audio_path("reply")
     try:
         res = await run_in_threadpool(assistant.handle_text, text, str(out))
@@ -376,43 +407,58 @@ async def chat_stream(payload: dict = Body(...)):
     Le client reçoit le texte au fil de l'eau et peut jouer le premier audio
     sans attendre la fin de la génération.
     """
-    text = (payload.get("text") or "").strip()
-    if not text:
-        return JSONResponse({"error": "Message vide."}, 400)
-    if len(text) > 10000:
-        return JSONResponse({"error": "Message trop long (10 000 caractères max)."}, 413)
+    text = _message_text(payload)
+    if isinstance(text, JSONResponse):
+        return text
+    return StreamingResponse(
+        _sentence_events(text),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
-    async def events():
-        q: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
 
-        def produce():
-            # Le pipeline est synchrone (HTTP + ONNX) : il tourne dans un
-            # thread et pousse ses événements vers la boucle asyncio.
-            try:
-                for ev in assistant.respond_stream(text, OUT_DIR):
-                    if ev.get("audio"):
-                        ev["audio_url"] = f"/api/audio/{ev['audio']}"
-                    loop.call_soon_threadsafe(q.put_nowait, ev)
-            except Exception as e:  # pragma: no cover - filet de sécurité
-                log.error("stream: %s", e)
-                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(e)})
-            finally:
-                loop.call_soon_threadsafe(q.put_nowait, None)
+async def _sentence_events(text: str) -> AsyncIterator[str]:
+    """Pont entre le pipeline (synchrone, thread) et le flux SSE (asyncio).
 
-        loop.run_in_executor(None, produce)
+    Si le client se déconnecte, Starlette referme ce générateur : on signale
+    alors `stop` au producteur — sinon il continuait à synthétiser des wav
+    pour personne jusqu'à la fin de la réponse (et la purge ne tournait pas).
+    Le producteur peut être engagé dans une synthèse : il s'arrête à la
+    frontière d'événement suivante, et gen.close() libère immédiatement le
+    verrou de l'Assistant.
+    """
+    q: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    stop = threading.Event()
+
+    def produce():
+        gen = None
+        try:
+            gen = assistant.respond_stream(text, OUT_DIR)
+            for ev in gen:
+                if stop.is_set():
+                    break
+                if ev.get("audio"):
+                    ev["audio_url"] = f"/api/audio/{ev['audio']}"
+                loop.call_soon_threadsafe(q.put_nowait, ev)
+        except Exception as e:  # pragma: no cover - filet de sécurité
+            log.error("stream: %s", e)
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(e)})
+        finally:
+            if gen is not None and hasattr(gen, "close"):
+                gen.close()  # libère le verrou de l'Assistant sans attendre le GC
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+    loop.run_in_executor(None, produce)
+    try:
         while True:
             ev = await q.get()
             if ev is None:
                 break
             yield f"data: {_json.dumps(ev, ensure_ascii=False)}\n\n"
+    finally:
+        stop.set()
         purge_old_audio()
-
-    return StreamingResponse(
-        events(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 @app.post("/api/chat_audio")

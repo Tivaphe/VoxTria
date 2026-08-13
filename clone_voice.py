@@ -34,9 +34,11 @@ BASE = Path(__file__).parent
 EMBED_DIR = BASE / "_supertonic_embed"
 VOICES_DIR = BASE / "voices"
 REPO_URL = "https://github.com/kdrkdrkdr/supertonic.embed.git"
-# Commit épinglé : sans cela, le code tiers exécuté par ce script peut
-# changer à tout moment côté amont. Mettre à jour sciemment après revue.
-REPO_REF = "main"
+# Révision épinglée (commit complet) : ce script EXÉCUTE du code tiers
+# (optimize_style.py). Sans épinglage, ce code peut changer à tout moment
+# côté amont. Pour mettre à jour : vérifier les changements amont, puis
+# remplacer le SHA ci-dessous sciemment (ou passer --ref en connaissance).
+REPO_REF = "ec5325e9e2a7d4cc51b0160428a2c299db7d5725"
 
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -76,11 +78,11 @@ def check_gpu() -> bool:
 
 
 def ensure_repo(ref: str = REPO_REF):
-    if EMBED_DIR.exists():
-        print(f"[ok] repo déjà présent : {EMBED_DIR}")
-        return
-    run(["git", "clone", REPO_URL, str(EMBED_DIR)])
-    # On fixe explicitement la révision utilisée (traçabilité + reproductibilité).
+    if not EMBED_DIR.exists():
+        run(["git", "clone", REPO_URL, str(EMBED_DIR)])
+    # Positionne la copie locale sur la révision épinglée (idempotent : un
+    # clone existant mais sur un autre état est ramené sur `ref`).
+    run(["git", "fetch", "origin"], cwd=str(EMBED_DIR))
     run(["git", "checkout", ref], cwd=str(EMBED_DIR))
 
 

@@ -164,3 +164,87 @@ def test_suppression_voix_inexistante(client):
 
 def test_suppression_voix_nom_invalide(client):
     assert client.delete("/api/voices/..%2F..%2Fx").status_code in (400, 404)
+
+
+def test_chat_stream_emet_du_sse(client, server_mod, monkeypatch):
+    """L'endpoint de streaming n'avait aucun test direct : on vérifie la forme SSE."""
+    import json
+
+    events = [
+        {"type": "delta", "text": "Bonjour. "},
+        {"type": "sentence", "index": 0, "text": "Bonjour.", "audio": "chunk_x.wav"},
+        {"type": "done", "assistant": "Bonjour.", "elapsed": 0.1,
+         "timings": {"first_audio_ms": 50}},
+    ]
+    monkeypatch.setattr(server_mod.assistant, "respond_stream",
+                        lambda text, out_dir: iter(events))
+    r = client.post("/api/chat_stream", json={"text": "salut"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/event-stream")
+    lignes = [li[5:] for li in r.text.splitlines() if li.startswith("data:")]
+    evts = [json.loads(li) for li in lignes]
+    assert [e["type"] for e in evts] == ["delta", "sentence", "done"]
+    # le nom de fichier audio est converti en URL serviable
+    assert evts[1]["audio_url"] == "/api/audio/chunk_x.wav"
+
+    assert client.post("/api/chat_stream", json={"text": "   "}).status_code == 400
+    assert client.post("/api/chat_stream", json={"text": "a" * 20000}).status_code == 413
+
+
+def test_corps_mal_types_refusés_nettement(client):
+    """Avant : text=42 -> AttributeError -> 500 opaque. Idem tts_test."""
+    for route in ("/api/chat_text", "/api/chat_stream"):
+        assert client.post(route, json={"text": 42}).status_code == 400
+        assert client.post(route, json={"text": ["a"]}).status_code == 400
+
+
+def test_tts_test_valide_ses_parametres(client):
+    """Avant : voice non validée (passthrough vers f\"{name}.json\" du SDK,
+    donc lecture de .json arbitraire) et steps/speed non numériques -> 500."""
+    assert client.post("/api/tts_test", json={"voice": 123}).status_code == 400
+    assert client.post("/api/tts_test", json={"voice": "../../etc/x"}).status_code == 400
+    assert client.post("/api/tts_test", json={"voice": "Z9"}).status_code == 400
+    assert client.post("/api/tts_test", json={"total_steps": "abc"}).status_code == 400
+    assert client.post("/api/tts_test", json={"text": 42}).status_code == 400
+    # valeur valide : on dépasse la validation (échec plus loin, modèle absent — 500 toléré)
+    r = client.post("/api/tts_test", json={"voice": "M1", "total_steps": 8})
+    assert r.status_code != 400
+
+
+def test_stream_producteur_stoppe_a_la_deconnexion(server_mod, monkeypatch):
+    """Avant : le client refermait le flux, le thread synthétisait quand même
+    les 10 000 événements prévus, et la purge ne tournait jamais."""
+    import asyncio
+    import threading
+    import time
+
+    produced = []
+    fin_atteinte = threading.Event()
+
+    def faux_stream(text, out_dir):
+        for i in range(10000):
+            produced.append(i)
+            time.sleep(0.001)
+            yield {"type": "delta", "text": "x"}
+        fin_atteinte.set()
+
+    purges = []
+    monkeypatch.setattr(server_mod.assistant, "respond_stream", faux_stream)
+    monkeypatch.setattr(server_mod, "purge_old_audio", lambda: purges.append(1))
+
+    async def scenario():
+        agen = server_mod._sentence_events("salut")
+        chunks = []
+        async for chunk in agen:
+            chunks.append(chunk)
+            if len(chunks) == 2:
+                break                       # déconnexion simulée
+        await agen.aclose()
+        return chunks
+
+    chunks = asyncio.run(scenario())
+    assert len(chunks) == 2
+    time.sleep(0.05)                        # laisse le producteur voir le stop
+    assert not fin_atteinte.is_set(), "le flux aurait dû être interrompu"
+    assert len(produced) < 1000, f"production non stoppée : {len(produced)}"
+    assert purges, "la purge doit tourner même après déconnexion"
