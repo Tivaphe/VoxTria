@@ -20,8 +20,7 @@ chaque phrase est synthétisée dès qu'elle est complète — le son démarre e
 🔁 Mode mains-libres : détection automatique de fin de parole (VAD),
 conversation continue sans recliquer
 💬 Historique de conversation + purge
-⚙️ Panneau de paramètres complet :
-LLM : URL, modèle (auto-découverte), clé API, température, max tokens, prompt
+⚙️ Panneau de paramètres complet : LLM : URL, modèle (auto-découverte), clé API, température, max tokens, prompt
 TTS : voix (M1–M5 / F1–F5), Qualité (steps), Vitesse, Silence
 Test rapide de voix
 🎭 Voix clonées (upload JSON Voice Builder ou clonage local)
