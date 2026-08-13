@@ -119,7 +119,7 @@ VoxTria/
 ├── config.json          # config locale — NON versionnée (peut contenir une clé API)
 ├── requirements.txt / requirements-dev.txt
 ├── pyproject.toml       # config pytest + ruff
-├── tests/               # tests (130) — aucun modèle requis
+├── tests/               # tests (104) — aucun modèle requis
 ├── static/
 │   └── index.html       # interface web
 ├── voices/              # voix clonées (.json) — créé à l'usage
@@ -168,13 +168,14 @@ Traces d'erreur : masquées par défaut, activables avec `VOXTRIA_DEBUG=1`.
 🧪 Développement
 ```bash
 pip install -r requirements-dev.txt
-pytest -q          # 130 tests, aucun modèle requis
+pytest -q          # 104 tests, aucun modèle requis
 ruff check .
 ```
-Les tests couvrent l'API, la validation de configuration, la logique du
-pipeline, le découpage en phrases du streaming et l'interface (syntaxe JS, cohérence des endpoints appelés, logique
-VAD exécutée sous Node) : ils tournent en quelques secondes sans télécharger
-Whisper ni Supertonic.
+Les tests couvrent l'API (dont l'endpoint SSE), la validation de
+configuration, la logique du pipeline et le découpage en phrases du streaming
+: ils tournent en quelques secondes sans télécharger Whisper ni Supertonic.
+L'interface web (logique VAD, file d'attente audio) n'est pas couverte de
+tests automatisés — elle a été vérifiée ponctuellement sous Node.
 ---
 ⚙️ Configuration (`config.json`)
 > `config.json` **n'est pas versionné** (il peut contenir une clé API). Il est
@@ -214,5 +215,4 @@ Construit avec faster-whisper (MIT),
 Supertonic (code MIT, poids
 OpenRAIL-M), FastAPI, et éventuellement
 supertonic.embed pour le
-clonage local. Police d'affichage via Google Fonts (chargée en ligne, fallback
-système hors-ligne).
+clonage local. L'interface utilise la pile de polices système (100% hors-ligne).
