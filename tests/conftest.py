@@ -20,7 +20,7 @@ def tmp_home(tmp_path, monkeypatch):
 
     Évite qu'un test écrive dans le vrai config.json ou le vrai ./voices.
     """
-    for f in ("config_schema.py", "pipeline.py", "server.py"):
+    for f in ("config_schema.py", "pipeline.py", "server.py", "translate.py"):
         shutil.copy(REPO / f, tmp_path / f)
     # config.json est ignoré par git : on part de l'exemple s'il est absent.
     src_cfg = REPO / "config.json"
@@ -31,10 +31,10 @@ def tmp_home(tmp_path, monkeypatch):
     (tmp_path / "_out").mkdir()
 
     monkeypatch.syspath_prepend(str(tmp_path))
-    for mod in ("config_schema", "pipeline", "server"):
+    for mod in ("config_schema", "pipeline", "server", "translate"):
         sys.modules.pop(mod, None)
     yield tmp_path
-    for mod in ("config_schema", "pipeline", "server"):
+    for mod in ("config_schema", "pipeline", "server", "translate"):
         sys.modules.pop(mod, None)
 
 

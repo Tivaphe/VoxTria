@@ -47,6 +47,19 @@ from config_schema import (
     safe_voice_path,
 )
 from pipeline import Assistant, load_config, save_config
+from translate import (
+    SESSIONS,
+    Segment,
+    Session,
+    SUPPORTED_LANGS,
+    Translator,
+    _extract_video_id,
+    _get_video_title,
+    download_hymt2,
+    fetch_youtube_subtitle_segment,
+    list_hymt2_quants,
+    HYMT2_REPOS,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("voxtria.server")
@@ -508,6 +521,278 @@ def clear():
 @app.get("/api/history")
 def history():
     return {"history": assistant.history}
+
+
+# -------------------------------------------------------------------------
+# Traduction live
+# -------------------------------------------------------------------------
+def _resolve_translate_llm_cfg() -> dict:
+    """Résout la config LLM utilisée par le Translator.
+
+    Si `translate.base_url` == "auto" (défaut), on hérite de `llm`. Sinon
+    on fusionne avec `llm` en prenant tout ce que `translate` ne précise pas
+    (clé API, max_tokens…). Permet de pointer Hy-MT2 sur un autre serveur
+    sans toucher au chat vocal.
+    """
+    cfg = load_config()
+    t = cfg.get("translate", {}) or {}
+    base = (t.get("base_url") or "auto").strip()
+    if base == "auto":
+        llm = dict(cfg["llm"])
+        llm["model"] = t.get("model") or llm.get("model") or "hy-mt2"
+    else:
+        llm = dict(cfg["llm"])
+        llm["base_url"] = base
+        if t.get("model"):
+            llm["model"] = t["model"]
+    return llm, t
+
+
+def _tts_synthesize_chunk(text: str, out_dir: Path) -> tuple[Optional[str], Optional[str]]:
+    """Synthétise un texte et renvoie (chemin_wav, erreur)."""
+    import uuid as _uuid
+    name = f"tr_{_uuid.uuid4().hex}.wav"
+    out = out_dir / name
+    try:
+        assistant.tts.synthesize(text, str(out))
+        return str(out), None
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+
+
+@app.post("/api/translate/text")
+async def translate_text(payload: dict = Body(...)):
+    """Traduit un texte via le LLM de traduction (Hy-MT2 par défaut).
+
+    Body : {"text": "...", "src": "en", "tgt": "fr",
+            "tts": true, "voice": "F1"}
+
+    Renvoie {"src_text", "tgt_text", "audio_url", "tts_error", "elapsed_ms"}.
+    """
+    text = _message_text(payload)
+    if isinstance(text, JSONResponse):
+        return text
+    src = (payload.get("src") or "en").lower()
+    tgt = (payload.get("tgt") or "fr").lower()
+    if src not in SUPPORTED_LANGS or tgt not in SUPPORTED_LANGS:
+        return JSONResponse(
+            {"error": f"Langue non supportée (src={src!r}, tgt={tgt!r})"}, 400
+        )
+    llm_cfg, tr_cfg = _resolve_translate_llm_cfg()
+    translator = Translator(llm_cfg, tr_cfg)
+    t0 = time.time()
+    try:
+        out = await run_in_threadpool(translator.translate, text, src, tgt)
+    except Exception as e:
+        return fail(str(e), 502, e)
+    elapsed_ms = int((time.time() - t0) * 1000)
+
+    audio_url = None
+    tts_error = None
+    if payload.get("tts", True):
+        out_path, err = await run_in_threadpool(_tts_synthesize_chunk, out, OUT_DIR)
+        if out_path:
+            audio_url = f"/api/audio/{Path(out_path).name}"
+        else:
+            tts_error = err
+        purge_old_audio()
+    return {
+        "src_text": text, "tgt_text": out,
+        "src": src, "tgt": tgt,
+        "audio_url": audio_url, "tts_error": tts_error,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+@app.post("/api/translate/session/start")
+async def translate_session_start(payload: dict = Body(...)):
+    """Démarre une session de traduction live.
+
+    Body : {"source": "youtube_sub"|"tab_audio"|"url_stream",
+            "url": "https://...",          # requis pour youtube_sub / url_stream
+            "src": "en", "tgt": "fr"}
+    Renvoie : {"id": "<sid>", "title": "...", "source": "..."}.
+
+    Pour "tab_audio" on n'a pas besoin d'URL : le navigateur capture
+    l'onglet séparément. Pour "youtube_sub" et "url_stream", `url` est
+    obligatoire. Le worker côté serveur ne tourne pas en continu : c'est
+    le navigateur qui poll `/api/translate/session/<id>/segment` et qui
+    nous envoie les segments (via `/api/translate/text` ou directement).
+    """
+    source = (payload.get("source") or "youtube_sub").lower()
+    if source not in ("youtube_sub", "tab_audio", "url_stream"):
+        return JSONResponse({"error": f"source inconnue : {source!r}"}, 400)
+    src = (payload.get("src") or "en").lower()
+    tgt = (payload.get("tgt") or "fr").lower()
+    if src not in SUPPORTED_LANGS or tgt not in SUPPORTED_LANGS:
+        return JSONResponse(
+            {"error": f"Langue non supportée (src={src!r}, tgt={tgt!r})"}, 400
+        )
+    title = ""
+    if source in ("youtube_sub", "url_stream"):
+        url = (payload.get("url") or "").strip()
+        if not url:
+            return JSONResponse({"error": "URL requise pour ce mode."}, 400)
+        if source == "youtube_sub":
+            vid = _extract_video_id(url)
+            if not vid:
+                return JSONResponse({"error": "URL YouTube invalide."}, 400)
+            title = await run_in_threadpool(_get_video_title, vid)
+        else:
+            title = url
+    elif source == "tab_audio":
+        title = "Capture audio onglet"
+    s = SESSIONS.create(source=source, src_lang=src, tgt_lang=tgt, title=title)
+    log.info("[TR-session] start %s src=%s→%s title=%r", s.id, src, tgt, title)
+    return {"id": s.id, "source": s.source, "src": src, "tgt": tgt, "title": title}
+
+
+@app.post("/api/translate/session/{sid}/segment")
+async def translate_session_segment(sid: str, payload: dict = Body(...)):
+    """Reçoit un segment source, le traduit, le synthétise, l'ajoute à la session.
+
+    Body : {"text": "Hello world", "src": "en", "tgt": "fr",
+            "tts": true}
+    Renvoie : {"idx", "src_text", "tgt_text", "audio_url", "elapsed_ms"}.
+    """
+    s = SESSIONS.get(sid)
+    if s is None:
+        return JSONResponse({"error": "Session introuvable."}, 404)
+    if not s.active:
+        return JSONResponse({"error": "Session fermée."}, 410)
+    text = _message_text(payload)
+    if isinstance(text, JSONResponse):
+        return text
+    src = (payload.get("src") or s.src_lang).lower()
+    tgt = (payload.get("tgt") or s.tgt_lang).lower()
+    if src not in SUPPORTED_LANGS or tgt not in SUPPORTED_LANGS:
+        return JSONResponse({"error": f"Langue non supportée"}, 400)
+
+    llm_cfg, tr_cfg = _resolve_translate_llm_cfg()
+    translator = Translator(llm_cfg, tr_cfg)
+    t0 = time.time()
+    try:
+        out = await run_in_threadpool(translator.translate, text, src, tgt)
+    except Exception as e:
+        return fail(str(e), 502, e)
+    audio_url = None
+    tts_error = None
+    if payload.get("tts", True):
+        out_path, err = await run_in_threadpool(_tts_synthesize_chunk, out, OUT_DIR)
+        if out_path:
+            audio_url = f"/api/audio/{Path(out_path).name}"
+        else:
+            tts_error = err
+        purge_old_audio()
+    elapsed_ms = int((time.time() - t0) * 1000)
+    seg = Segment(
+        idx=s.next_idx(), src_text=text, tgt_text=out,
+        src_lang=src, tgt_lang=tgt,
+        t0=time.time(), elapsed_ms=elapsed_ms,
+        audio_url=audio_url, tts_error=tts_error,
+    )
+    s.add_segment(seg)
+    return seg.to_dict()
+
+
+@app.get("/api/translate/session/{sid}/segments")
+def translate_session_segments(sid: str, since: int = 0, limit: int = 100):
+    """Renvoie les segments d'une session depuis `since` (exclu)."""
+    s = SESSIONS.get(sid)
+    if s is None:
+        return JSONResponse({"error": "Session introuvable."}, 404)
+    segs = s.snapshot(since_idx=since, limit=limit)
+    return {"id": sid, "segments": segs, "active": s.active}
+
+
+@app.get("/api/translate/sessions")
+def translate_sessions():
+    """Liste des sessions actives et récentes (LRU borné)."""
+    return {"sessions": SESSIONS.list_sessions()}
+
+
+@app.post("/api/translate/session/{sid}/stop")
+def translate_session_stop(sid: str):
+    """Ferme une session (le worker côté navigateur arrête de poller)."""
+    s = SESSIONS.get(sid)
+    if s is None:
+        return JSONResponse({"error": "Session introuvable."}, 404)
+    s.close()
+    return {"ok": True, "id": sid}
+
+
+@app.get("/api/translate/hymt2/list")
+def translate_hymt2_list(size: str = "1.8B"):
+    """Liste les quantizations GGUF Hy-MT2 disponibles sur Hugging Face.
+
+    L'appel réseau n'est fait que sur demande (sinon on ralentirait l'UI).
+    Renvoie `{"size", "repo", "quants": [{"name", "quant", "size_bytes"}]}`.
+    """
+    if size not in HYMT2_REPOS:
+        return JSONResponse({"error": f"size inconnu : {size!r}"}, 400)
+    quants = list_hymt2_quants(size)
+    if not quants:
+        return {
+            "size": size, "repo": HYMT2_REPOS[size],
+            "quants": [], "warning": "HF injoignable ou repo vide",
+        }
+    return {"size": size, "repo": HYMT2_REPOS[size], "quants": quants}
+
+
+@app.post("/api/translate/hymt2/download")
+async def translate_hymt2_download(payload: dict = Body(...)):
+    """Télécharge une quantization Hy-MT2 dans ./models/.
+
+    Body : {"quant": "Q4_K_M", "size": "1.8B", "out_dir": "./models"}
+    Renvoie : {"path": ".../Hy-MT2-1.8B-Q4_K_M.gguf", "size_bytes": 1234}.
+    """
+    quant = (payload.get("quant") or "Q4_K_M").strip()
+    size = (payload.get("size") or "1.8B").strip()
+    out_dir = (payload.get("out_dir") or "./models").strip()
+    if size not in HYMT2_REPOS:
+        return JSONResponse({"error": f"size inconnu : {size!r}"}, 400)
+    # Bloque les chemins absolus ou contenant .. : out_dir est confiné au
+    # répertoire de travail (le caller peut quand même pointer dans
+    # ./models, ./hy-mt2, etc.).
+    out_path = Path(out_dir).resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        out_path.relative_to(cwd)
+    except ValueError:
+        return JSONResponse(
+            {"error": "out_dir doit être un chemin relatif au répertoire courant."},
+            400,
+        )
+    try:
+        path = await run_in_threadpool(
+            download_hymt2,
+            quant, str(out_path), size, False,           # pas de barre stdout
+        )
+    except ValueError as e:
+        return fail(str(e), 400, e)
+    except Exception as e:
+        return fail(f"Téléchargement échoué : {e}", 502, e)
+    size_bytes = Path(path).stat().st_size
+    return {"path": path, "size_bytes": size_bytes,
+            "quant": quant, "size": size}
+
+
+@app.get("/api/translate/youtube/next")
+async def translate_youtube_next(video_id: str, lang: str = "en",
+                                 last_t_ms: int = 0):
+    """Helper : récupère le prochain segment de sous-titres YouTube.
+
+    Utilisé par le mode `youtube_sub` côté navigateur (poll toutes les
+    `poll_interval_s` secondes). Renvoie `{"text": null, "t_ms": last_t_ms}`
+    si rien de neuf — l'UI reboucle sans spammer le serveur.
+    """
+    vid = (video_id or "").strip()
+    if not vid:
+        return JSONResponse({"error": "video_id requis."}, 400)
+    text, t = await run_in_threadpool(
+        fetch_youtube_subtitle_segment, vid, lang, int(last_t_ms)
+    )
+    return {"text": text, "t_ms": t, "video_id": vid, "lang": lang}
 
 
 @app.get("/api/health")

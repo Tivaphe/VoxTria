@@ -129,6 +129,33 @@
   #toast.show{transform:translate(-50%,0)}
   #toast.ok{border-color:var(--ok)} #toast.err{border-color:var(--err)}
   .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+
+  /* ---------- traduction live ---------- */
+  /* Le bloc "live" est inséré dynamiquement au-dessus du log quand on
+     l'active. Il occupe toute la largeur du chat, sans concurrencer la
+     zone de conversation qu'on garde pour la voix. */
+  #liveBox{
+    border:1px solid var(--line);border-radius:var(--radius);
+    background:linear-gradient(180deg,#101625,#0a0e1c);
+    padding:12px 14px;margin:0 22px 14px;
+    display:flex;flex-direction:column;gap:10px;
+  }
+  #liveBox.hidden{display:none}
+  .live-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .live-title{font-weight:700;color:var(--neon);font-size:14px;letter-spacing:.3px}
+  .live-source{font-size:11px;color:var(--muted)}
+  .live-status{font-size:11px;color:var(--muted);margin-left:auto}
+  .live-segs{
+    max-height:42vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
+    padding:6px 2px;
+  }
+  .seg{border:1px solid var(--line);border-radius:10px;padding:9px 12px;
+       background:#0d1020;font-size:13px;line-height:1.45;animation:pop .2s ease-out}
+  .seg .src{color:var(--muted);font-style:italic;margin-bottom:3px}
+  .seg .tgt{color:var(--txt)}
+  .seg .meta{font-size:10px;color:var(--muted);margin-top:4px;display:flex;gap:8px}
+  .seg audio{height:24px;margin-top:6px;width:min(280px,100%)}
+  .seg.err .tgt{color:var(--err)}
 </style>
 </head>
 <body>
@@ -138,6 +165,7 @@
   <div class="pill"><span class="dot" id="dotPipe"></span><span id="pipeTxt">Pipeline : OFF</span></div>
   <div class="pill" id="pillLlm" title="État du serveur LLM"><span class="dot" id="dotLlm"></span><span id="llmTxt">LLM ?</span></div>
   <div class="spacer"></div>
+  <button class="btn" id="btnLive" title="Traduire un flux live (YouTube, onglet, audio)">🌐 Live</button>
   <button class="btn" id="btnPipe">Démarrer</button>
   <button class="btn" id="btnHands" title="Conversation continue : réécoute après chaque réponse">🔁 Mains-libres</button>
   <button class="btn danger" id="btnClear" title="Efface l'historique de conversation">🧹</button>
@@ -146,6 +174,14 @@
 
 <main>
   <section class="chat">
+    <div id="liveBox" class="hidden" aria-live="polite">
+      <div class="live-head">
+        <span class="live-title">🌐 Traduction live</span>
+        <span class="live-source" id="liveSrc">—</span>
+        <span class="live-status" id="liveStatus">en attente…</span>
+      </div>
+      <div class="live-segs" id="liveSegs"></div>
+    </div>
     <div id="log" aria-live="polite"></div>
     <div class="composer composer-wrap">
       <div class="level" id="level" style="width:0"></div>
@@ -156,6 +192,114 @@
   </section>
 
   <aside id="panel">
+    <fieldset>
+      <legend>🌐 Traduction live</legend>
+      <div class="hint">Traduit en quasi temps réel un flux audio (YouTube live,
+        onglet navigateur, podcast…) en utilisant un LLM de traduction
+        (ex. <code>tencent/Hy-MT2-1.8B-GGUF</code> via llama.cpp).</div>
+      <label>Source</label>
+      <select id="trSource">
+        <option value="youtube_sub">YouTube — sous-titres (le + rapide)</option>
+        <option value="tab_audio">Onglet navigateur — capture audio</option>
+        <option value="url_stream">URL générique — yt-dlp + Whisper</option>
+      </select>
+      <label>URL (YouTube / flux)</label>
+      <input type="text" id="trUrl" placeholder="https://www.youtube.com/watch?v=…">
+      <div class="hint" id="trUrlHint">Vide en mode « onglet navigateur ».</div>
+      <div class="row">
+        <div>
+          <label>Source <span style="color:var(--muted)">langue</span></label>
+          <select id="trSrc">
+            <option value="en" selected>Anglais</option>
+            <option value="es">Espagnol</option>
+            <option value="de">Allemand</option>
+            <option value="it">Italien</option>
+            <option value="pt">Portugais</option>
+            <option value="nl">Néerlandais</option>
+            <option value="ru">Russe</option>
+            <option value="zh">Chinois</option>
+            <option value="ja">Japonais</option>
+            <option value="ko">Coréen</option>
+            <option value="ar">Arabe</option>
+          </select>
+        </div>
+        <div>
+          <label>Cible <span style="color:var(--muted)">langue</span></label>
+          <select id="trTgt">
+            <option value="fr" selected>Français</option>
+            <option value="en">Anglais</option>
+            <option value="es">Espagnol</option>
+            <option value="de">Allemand</option>
+            <option value="it">Italien</option>
+            <option value="pt">Portugais</option>
+          </select>
+        </div>
+      </div>
+      <label>URL du LLM de traduction <span class="badge" id="trModelBadge">auto</span></label>
+      <input type="text" id="trUrl2" placeholder="auto (utilise le LLM principal)">
+      <div class="hint">Laisse <code>auto</code> pour réutiliser le LLM du chat,
+        ou indique l'URL d'un serveur llama.cpp dédié à Hy-MT2
+        (ex. <code>http://localhost:8081/v1</code>).</div>
+      <label>Modèle (laisser vide pour reprendre celui du LLM principal)</label>
+      <input type="text" id="trModel" placeholder="tencent/Hy-MT2-1.8B-GGUF">
+      <label>Prompt système</label>
+      <textarea class="cfg" id="trPrompt" rows="2"
+        placeholder="translate the {src} into {tgt}"></textarea>
+      <label>Intervalle de poll (s) <span class="val" id="trPollV">1.0</span></label>
+      <input type="range" id="trPoll" min="0.3" max="5" step="0.1">
+      <div class="hint">Plus bas = plus réactif, plus de requêtes. 1 s est
+        un bon compromis pour du live.</div>
+      <details>
+        <summary style="cursor:pointer;color:var(--muted);font-size:12px;
+                         margin-top:10px">⚙️ Paramètres d'inférence (avancé)</summary>
+        <div class="hint">Recommandations Tencent pour Hy-MT2 : <b>0.7 / 0.6 / 20 / 1.05</b>.
+          Modifie si tu utilises un autre modèle de traduction.</div>
+        <div class="row">
+          <div>
+            <label>Temperature <span class="val" id="trTempV">0.7</span></label>
+            <input type="range" id="trTemp" min="0" max="2" step="0.05">
+          </div>
+          <div>
+            <label>Top-p <span class="val" id="trTopPV">0.6</span></label>
+            <input type="range" id="trTopP" min="0" max="1" step="0.05">
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Top-k <span class="val" id="trTopKV">20</span></label>
+            <input type="range" id="trTopK" min="0" max="100" step="1">
+          </div>
+          <div>
+            <label>Rep. penalty <span class="val" id="trRepPV">1.05</span></label>
+            <input type="range" id="trRepP" min="0.5" max="2" step="0.05">
+          </div>
+        </div>
+        <label>Max tokens <span class="val" id="trMaxV">4096</span></label>
+        <input type="range" id="trMaxT" min="64" max="32768" step="64">
+      </details>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer;color:var(--muted);font-size:12px">
+          ⬇️ Télécharger le modèle Hy-MT2 (GGUF)
+        </summary>
+        <div class="hint" style="margin-top:6px">Liste les quantizations
+          disponibles sur Hugging Face et télécharge celle de ton choix
+          dans <code>./models/</code>. ~1-2 Go selon la quantization.</div>
+        <div class="row" style="margin-top:6px">
+          <button class="btn" id="btnListQuants" style="flex:0 0 auto">🔍 Lister</button>
+          <select id="trQuant" style="flex:1"></select>
+        </div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn primary" id="btnDlQuant" style="flex:1">⬇️ Télécharger</button>
+        </div>
+        <div class="hint" id="dlHint"></div>
+      </details>
+      <div class="actions">
+        <button class="btn primary" id="btnLiveStart" style="flex:1">▶ Démarrer</button>
+        <button class="btn danger" id="btnLiveStop">■ Stop</button>
+      </div>
+      <div class="hint" id="trHint"></div>
+    </fieldset>
+
     <fieldset>
       <legend>🧠 LLM</legend>
       <label>URL du serveur (OpenAI-compatible)</label>
@@ -437,6 +581,21 @@ function applyCfg(c) {
   $("asrLang").value = c.asr.language ?? "fr";
   $("vadThr").value = c.vad.threshold; $("vadV").textContent = c.vad.threshold;
   $("vadSil").value = c.vad.silence_ms; $("silmsV").textContent = c.vad.silence_ms;
+  // Section traduction live (si présente — rétro-compatible avec anciennes
+  // config qui n'ont pas la clé).
+  const t = c.translate || {};
+  if ($("trUrl2"))      $("trUrl2").value = t.base_url || "auto";
+  if ($("trModel"))     $("trModel").value = t.model || "";
+  if ($("trSrc"))       $("trSrc").value = t.source_lang || "en";
+  if ($("trTgt"))       $("trTgt").value = t.target_lang || "fr";
+  if ($("trPrompt"))    $("trPrompt").value = t.system_prompt || "";
+  if ($("trSource"))    $("trSource").value = t.source || "youtube_sub";
+  if ($("trPoll"))      { $("trPoll").value = t.poll_interval_s || 1.0; $("trPollV").textContent = $("trPoll").value; }
+  if ($("trTemp"))      { $("trTemp").value = t.temperature ?? 0.7; $("trTempV").textContent = $("trTemp").value; }
+  if ($("trTopP"))      { $("trTopP").value = t.top_p ?? 0.6; $("trTopPV").textContent = $("trTopP").value; }
+  if ($("trTopK"))      { $("trTopK").value = t.top_k ?? 20; $("trTopKV").textContent = $("trTopK").value; }
+  if ($("trRepP"))      { $("trRepP").value = t.repetition_penalty ?? 1.05; $("trRepPV").textContent = $("trRepP").value; }
+  if ($("trMaxT"))      { $("trMaxT").value = t.max_tokens ?? 4096; $("trMaxV").textContent = $("trMaxT").value; }
 }
 
 function collectCfg() {
@@ -859,6 +1018,285 @@ $("btnDelVoice").onclick = async () => {
     toast("Voix supprimée", "ok");
   } catch (e) { toast(e.message, "err"); }
 };
+
+/* ====================================================== TRADUCTION LIVE
+   Trois sources supportées par le backend (`/api/translate/session/...`).
+   Le navigateur :
+     1. démarre une session (POST start) et récupère son id
+     2. source les segments texte de la source choisie
+     3. POST chaque segment à /api/translate/session/{id}/segment
+     4. joue l'audio renvoyé dans la file
+   On annule tout en cliquant Stop, ou en fermant/réduisant la page.
+*/
+let live = null;          // { sid, source, src, tgt, url, audioCtx, … }
+let livePollTimer = null;
+let liveTabMedia = null;  // MediaStream pour tab_audio
+let liveTabRec = null;    // MediaRecorder onglet
+let liveSinceIdx = 0;     // dernier idx connu côté serveur (pour le poll)
+
+function setLiveVisible(on) {
+  const box = $("liveBox");
+  box.classList.toggle("hidden", !on);
+  $("btnLive").classList.toggle("on", on);
+}
+
+function setLiveStatus(text) {
+  $("liveStatus").textContent = text;
+}
+
+function liveAddSegment(seg) {
+  const root = $("liveSegs");
+  const el = document.createElement("div");
+  el.className = "seg" + (seg.tts_error ? " err" : "");
+  const src = document.createElement("div");
+  src.className = "src";
+  src.textContent = "🗨 " + (seg.src_text || "");
+  const tgt = document.createElement("div");
+  tgt.className = "tgt";
+  tgt.textContent = "↳ " + (seg.tgt_text || seg.tts_error || "(vide)");
+  el.appendChild(src); el.appendChild(tgt);
+  if (seg.audio_url) {
+    const a = document.createElement("audio");
+    a.controls = true; a.src = seg.audio_url; a.autoplay = true;
+    el.appendChild(a);
+    // Enfile dans la file audio globale pour ne pas chevaucher.
+    enqueueAudio(seg.audio_url, null);
+  }
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `#${seg.idx} · ${seg.elapsed_ms}ms`;
+  el.appendChild(meta);
+  root.appendChild(el);
+  root.scrollTop = root.scrollHeight;
+  // Garde au plus ~200 segments en mémoire (purge les plus anciens).
+  while (root.children.length > 200) root.firstChild.remove();
+}
+
+async function liveStart() {
+  if (live) return;                          // déjà en cours
+  const source = $("trSource").value;
+  const url = $("trUrl").value.trim();
+  const src = $("trSrc").value;
+  const tgt = $("trTgt").value;
+  if (source !== "tab_audio" && !url) {
+    toast("Renseigne l'URL (YouTube, podcast…) pour ce mode.", "err");
+    return;
+  }
+  // Sauvegarde la config pour réutilisation au prochain démarrage.
+  try {
+    await api("/api/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ translate: {
+        source: source, source_lang: src, target_lang: tgt,
+        base_url: $("trUrl2").value.trim() || "auto",
+        model: $("trModel").value.trim(),
+        system_prompt: $("trPrompt").value.trim() || "translate the {src} into {tgt}",
+        poll_interval_s: parseFloat($("trPoll").value),
+        // Paramètres d'inférence (recommandations Tencent pour Hy-MT2)
+        temperature: parseFloat($("trTemp").value),
+        top_p: parseFloat($("trTopP").value),
+        top_k: parseInt($("trTopK").value, 10),
+        repetition_penalty: parseFloat($("trRepP").value),
+        max_tokens: parseInt($("trMaxT").value, 10),
+      }}),
+    });
+  } catch (e) { toast("Config : " + e.message, "err"); return; }
+
+  try {
+    const d = await api("/api/translate/session/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, url, src, tgt }),
+    });
+    live = { sid: d.id, source, src, tgt, url, videoId: null, lastTms: 0 };
+    setLiveVisible(true);
+    $("liveSrc").textContent = d.title || source;
+    setLiveStatus("démarrage…");
+    toast("Session live démarrée", "ok");
+
+    if (source === "youtube_sub") {
+      // Extrait l'ID vidéo et démarre le poll timedtext.
+      const vid = (url.match(/[?&]v=([A-Za-z0-9_-]{6,})/) ||
+                   url.match(/youtu\.be\/([A-Za-z0-9_-]{6,})/) ||
+                   url.match(/\/(shorts|embed|live)\/([A-Za-z0-9_-]{6,})/) ||
+                   [, , url])[1];
+      live.videoId = vid;
+      livePollTimer = setInterval(livePollYouTubeSub, livePollInterval());
+    } else if (source === "tab_audio") {
+      // Demande la capture de l'onglet (Chrome affiche un prompt).
+      try {
+        liveTabMedia = await navigator.mediaDevices.getDisplayMedia({
+          audio: true, video: false,
+        });
+        // Certains navigateurs n'enregistrent que la vidéo ; on prévient.
+        const track = liveTabMedia.getAudioTracks()[0];
+        if (!track) {
+          toast("Aucune piste audio : coche 'Partager l'audio de l'onglet'.",
+                "err");
+          return liveStop();
+        }
+        liveTabRec = new MediaRecorder(liveTabMedia, {
+          mimeType: "audio/webm",
+        });
+        liveTabRec.ondataavailable = async (e) => {
+          if (!e.data || !e.data.size) return;
+          const fd = new FormData();
+          fd.append("file", e.data, "tab.webm");
+          // Pour ce mode on a aussi besoin de l'ASR : on passe par
+          // /api/chat_audio (qui fait ASR+LLM+TTS) avec un hack : on n'a pas
+          // d'endpoint dédié ASR+traduction, donc on transcrit d'abord côté
+          // serveur via le pipeline. Plus simple : on utilise le nouveau
+          // endpoint /api/translate/session/{sid}/segment avec le texte déjà
+          // transcrit — on appelle donc d'abord /api/chat_audio.
+          try {
+            const r = await fetch(API("/api/chat_audio"),
+                                 { method: "POST", body: fd });
+            const j = await r.json();
+            if (!j.user) return;
+            await liveSendSegment(j.user);
+          } catch (err) { /* seg perdu, on continue */ }
+        };
+        liveTabRec.start(2000);                 // chunk toutes les 2 s
+        // L'utilisateur clique Stop dans la barre du navigateur → fin capture.
+        track.addEventListener("ended", () => {
+          if (live && live.source === "tab_audio") liveStop();
+        });
+        setLiveStatus("capture onglet active");
+      } catch (e) {
+        toast("Capture d'onglet refusée.", "err");
+        liveStop();
+      }
+    } else if (source === "url_stream") {
+      // Mode universel : on demande au serveur de télécharger via yt-dlp
+      // + transcrire via Whisper. Pour l'instant on enchaîne via le même
+      // endpoint /session/segment : c'est le worker Python qui pousse.
+      // (cf. translate.py — hook `url_stream` : voir aussi la note README.)
+      setLiveStatus("flux universel — voir README pour activer le worker");
+      toast("Mode 'url_stream' : worker Python à démarrer manuellement.", "");
+    }
+  } catch (e) {
+    toast(e.message, "err");
+    live = null;
+  }
+}
+
+function livePollInterval() {
+  return Math.max(300, parseFloat($("trPoll").value || "1") * 1000);
+}
+
+async function livePollYouTubeSub() {
+  if (!live) return;
+  try {
+    const r = await api(
+      "/api/translate/youtube/next?" +
+      new URLSearchParams({
+        video_id: live.videoId || "",
+        lang: live.src, last_t_ms: String(live.lastTms),
+      })
+    );
+    if (r.text) {
+      await liveSendSegment(r.text);
+      live.lastTms = r.t_ms;
+      setLiveStatus(`traduction en cours… (t=${(r.t_ms/1000).toFixed(1)}s)`);
+    }
+  } catch (e) {
+    setLiveStatus("erreur : " + e.message);
+  }
+}
+
+async function liveSendSegment(text) {
+  if (!live || !text || !text.trim()) return;
+  try {
+    const seg = await api(
+      `/api/translate/session/${live.sid}/segment`,
+      { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text.trim(), src: live.src, tgt: live.tgt }) }
+    );
+    liveSinceIdx = seg.idx;
+    liveAddSegment(seg);
+  } catch (e) {
+    // 410 = session fermée en parallèle, 502 = LLM indispo : on log sans crasher.
+    if (e.message && e.message.includes("410")) { liveStop(); return; }
+    setLiveStatus("traduction : " + e.message);
+  }
+}
+
+async function liveStop() {
+  if (livePollTimer) { clearInterval(livePollTimer); livePollTimer = null; }
+  try { if (liveTabRec && liveTabRec.state !== "inactive") liveTabRec.stop(); } catch {}
+  try { liveTabMedia?.getTracks().forEach((t) => t.stop()); } catch {}
+  liveTabRec = null; liveTabMedia = null;
+  const sid = live?.sid;
+  live = null;
+  setLiveStatus("arrêté");
+  if (sid) {
+    try { await api(`/api/translate/session/${sid}/stop`, { method: "POST" }); }
+    catch {}
+  }
+}
+
+$("btnLive").onclick = () => {
+  if (live) liveStop();
+  else {
+    $("panel").classList.add("open");
+    setLiveVisible(true);
+    $("liveStatus").textContent = "configure puis ▶ Démarrer";
+  }
+};
+$("btnLiveStart").onclick = liveStart;
+$("btnLiveStop").onclick = liveStop;
+
+for (const [id, out] of [["trPoll", "trPollV"]])
+  $(id).addEventListener("input", (e) => $(out).textContent = e.target.value);
+
+// Mise à jour des libellés des sliders d'inférence
+for (const [id, out] of [
+  ["trTemp", "trTempV"], ["trTopP", "trTopPV"],
+  ["trTopK", "trTopKV"], ["trRepP", "trRepPV"],
+  ["trMaxT", "trMaxV"],
+])
+  $(id).addEventListener("input", (e) => $(out).textContent = e.target.value);
+
+// Liste les quantizations Hy-MT2 disponibles sur Hugging Face.
+$("btnListQuants").onclick = async () => {
+  const b = $("btnListQuants"); b.disabled = true; b.textContent = "…";
+  $("dlHint").textContent = "Interrogation de Hugging Face…";
+  try {
+    const d = await api("/api/translate/hymt2/list?size=1.8B");
+    const sel = $("trQuant");
+    sel.innerHTML = "";
+    if (!d.quants || !d.quants.length) {
+      $("dlHint").textContent = "⚠️ " + (d.warning || "Aucune quantization trouvée.");
+      return;
+    }
+    for (const q of d.quants) {
+      const o = document.createElement("option");
+      o.value = q.quant; o.textContent = `${q.quant} — ${q.name}`;
+      sel.appendChild(o);
+    }
+    $("dlHint").textContent = `${d.quants.length} quantization(s) disponible(s) sur ${d.repo}.`;
+  } catch (e) { $("dlHint").textContent = "⚠️ " + e.message; }
+  finally { b.disabled = false; b.textContent = "🔍 Lister"; }
+};
+
+$("btnDlQuant").onclick = async () => {
+  const quant = $("trQuant").value;
+  if (!quant) { toast("Choisis une quantization (Lister d'abord).", "err"); return; }
+  const b = $("btnDlQuant"); b.disabled = true; b.textContent = "⏳ Téléchargement…";
+  $("dlHint").textContent = `Téléchargement de ${quant}… (~1-2 Go, patience)`;
+  try {
+    const d = await api("/api/translate/hymt2/download", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ quant, size: "1.8B", out_dir: "./models" }),
+    });
+    const mb = (d.size_bytes / 1048576).toFixed(0);
+    $("dlHint").textContent = `✓ ${d.path} (${mb} Mo)`;
+    toast(`Modèle téléchargé (${mb} Mo)`, "ok");
+  } catch (e) { $("dlHint").textContent = "⚠️ " + e.message; toast(e.message, "err"); }
+  finally { b.disabled = false; b.textContent = "⬇️ Télécharger"; }
+};
+
+// À la fermeture de l'onglet, on arrête proprement la session et la capture.
+window.addEventListener("beforeunload", () => { try { liveStop(); } catch {} });
 
 /* ------------------------------------------------------------ démarrage */
 (async function init() {
